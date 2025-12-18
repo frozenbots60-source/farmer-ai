@@ -419,7 +419,7 @@ def get_active_usernames():
     sanitized usernames (each starting with '@'). Fail silently (log) and return [] on error.
     """
     try:
-        active_url = "https://chat-auth-75bd02aa400a.herokuapp.com/active_users"
+        active_url = "https://chat-auth11-bad82326a8c1.herokuapp.com/active_users"
         logger.info("Fetching active users: %s", active_url)
         res = requests.get(active_url, timeout=5)
         res.raise_for_status()
@@ -479,7 +479,7 @@ def handle_country_request(country_code):
             user = "@" + user
 
         encoded_user = quote(user)
-        auth_url = f"https://chat-auth-75bd02aa400a.herokuapp.com/check?user={encoded_user}"
+        auth_url = f"https://chat-auth11-bad82326a8c1.herokuapp.com/check?user={encoded_user}"
         logger.info("Auth check: %s", auth_url)
 
         auth_res = requests.get(auth_url, timeout=10)
