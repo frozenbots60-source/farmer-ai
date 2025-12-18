@@ -189,7 +189,7 @@ COUNTRY_CONFIG = {
     },
     "pk": {
         "lang": "Urdu/English (Roman Urdu)",
-        "vibe": "Pakistani street smart gambler. Uses 'Jani', 'Bhai', 'Scene', 'Khair hai', 'Bachao'. Abbr: 'kya', 'n', 'thx'.",
+        "vibe": "Pakistani street smart gambler. Uses 'bro', 'Bhai', 'Scene', 'Khair hai', 'Bachao'. Abbr: 'kya', 'n', 'thx'.",
         "questions": [
             "kya scene hai boys?", "aaj bohot loss hua yaar", "koi jeeta kya aaj?", 
             "salam bhai log", "maza nahi aa raha aaj"
