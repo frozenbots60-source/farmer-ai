@@ -414,7 +414,7 @@ async def get_active_usernames():
     """
     try:
         # ✅ FIXED: Standard string URL, no markdown
-        active_url = "[https://farmer-auth-d295e48058cf.herokuapp.com/active_users](https://farmer-auth-d295e48058cf.herokuapp.com/active_users)"
+        active_url = "https://farmer-auth-d295e48058cf.herokuapp.com/active_users"
         logger.info("Fetching active users: %s", active_url)
         
         timeout = aiohttp.ClientTimeout(total=5)
