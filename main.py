@@ -414,7 +414,7 @@ async def get_active_usernames():
     """
     try:
         # ✅ FIXED: Standard string URL, no markdown
-        active_url = "https://farmer-auth-d295e48058cf.herokuapp.com/active_users"
+        active_url = "[https://farmer-auth-d295e48058cf.herokuapp.com/active_users](https://farmer-auth-d295e48058cf.herokuapp.com/active_users)"
         logger.info("Fetching active users: %s", active_url)
         
         timeout = aiohttp.ClientTimeout(total=5)
@@ -479,7 +479,7 @@ async def handle_country_request(country_code):
 
         encoded_user = quote(user)
         # ✅ FIXED: Standard string URL, no markdown, correctly formatted parameters
-        auth_url = f"https://farmer-auth-d295e48058cf.herokuapp.com/check?user={encoded_user}"
+        auth_url = f"[https://farmer-auth-d295e48058cf.herokuapp.com/check?user=](https://farmer-auth-d295e48058cf.herokuapp.com/check?user=){encoded_user}"
         logger.info("Auth check: %s", auth_url)
 
         timeout = aiohttp.ClientTimeout(total=10)
@@ -499,6 +499,7 @@ async def handle_country_request(country_code):
 
 
     final_prompt = ""
+    selected_model = "copilot" # default fallback
     
     persona_filled = PERSONA_TEMPLATE.format(
         lang=config["lang"],
@@ -515,6 +516,7 @@ async def handle_country_request(country_code):
     # ---------------------------------------------------------------------------
 
     if action == "analyze":
+        selected_model = "gpt4"
         final_prompt = avoid_block + ANALYSIS_PROMPT.format(
             username=user,
             recent_messages=data.get("recent_messages", ""),
@@ -522,6 +524,7 @@ async def handle_country_request(country_code):
         )
 
     elif action == "chat":
+        selected_model = "davidgpt"
         vibe = data.get("vibe", "neutral")
         topics = data.get("topics", "none")
         behaviour = data.get("behaviour_profile", "friendly")
@@ -590,13 +593,13 @@ async def handle_country_request(country_code):
 
 
     try:
-        logger.info("Calling inference API for %s", country_code)
+        logger.info("Calling inference API for %s with model %s", country_code, selected_model)
 
         # ================= NEW API CALL (Copilot Model) - ASYNC =================
         # ✅ FIXED: Standard string URL, no markdown
-        api_url = "https://ai-chat.apisimpacientes.workers.dev/chat"
+        api_url = "[https://ai-chat.apisimpacientes.workers.dev/chat](https://ai-chat.apisimpacientes.workers.dev/chat)"
         params = {
-            "model": "gpt4",
+            "model": selected_model,
             "prompt": final_prompt
         }
 
