@@ -596,7 +596,7 @@ async def handle_country_request(country_code):
         # ✅ FIXED: Standard string URL, no markdown
         api_url = "https://ai-chat.apisimpacientes.workers.dev/chat"
         params = {
-            "model": "copilot",
+            "model": "gpt4",
             "prompt": final_prompt
         }
 
