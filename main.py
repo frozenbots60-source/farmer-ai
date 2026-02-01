@@ -18,14 +18,6 @@ logger = logging.getLogger("CHAT-FARMER")
 
 app = Flask(__name__)
 
-INFERENCE_URL = os.getenv("INFERENCE_URL")
-INFERENCE_MODEL_ID = os.getenv("INFERENCE_MODEL_ID")
-INFERENCE_KEY = os.getenv("INFERENCE_KEY")
-
-logger.info("Inference URL: %s", INFERENCE_URL)
-logger.info("Inference MODEL: %s", INFERENCE_MODEL_ID)
-logger.info("Inference KEY set: %s", bool(INFERENCE_KEY))
-
 # ================== COUNTRY CONFIGURATION ===================
 COUNTRY_CONFIG = {
     "de": {
@@ -485,7 +477,8 @@ async def handle_country_request(country_code):
             user = "@" + user
 
         encoded_user = quote(user)
-        auth_url = f"[https://chat-auth11-bad82326a8c1.herokuapp.com/check?user=](https://chat-auth11-bad82326a8c1.herokuapp.com/check?user=){encoded_user}"
+        # UPDATED AUTH URL
+        auth_url = f"[https://farmer-auth-d295e48058cf.herokuapp.com/check?user=](https://farmer-auth-d295e48058cf.herokuapp.com/check?user=){encoded_user}"
         logger.info("Auth check: %s", auth_url)
 
         timeout = aiohttp.ClientTimeout(total=10)
@@ -599,7 +592,6 @@ async def handle_country_request(country_code):
         logger.info("Calling inference API for %s", country_code)
 
         # ================= NEW API CALL (Copilot Model) - ASYNC =================
-        # URL structure: [https://ai-chat.apisimpacientes.workers.dev/chat?model=copilot&prompt=](https://ai-chat.apisimpacientes.workers.dev/chat?model=copilot&prompt=)...
         api_url = "[https://ai-chat.apisimpacientes.workers.dev/chat](https://ai-chat.apisimpacientes.workers.dev/chat)"
         params = {
             "model": "copilot",
