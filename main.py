@@ -421,7 +421,7 @@ async def get_active_usernames():
     Non-blocking version using aiohttp.
     """
     try:
-        active_url = "[https://chat-auth11-bad82326a8c1.herokuapp.com/active_users](https://chat-auth11-bad82326a8c1.herokuapp.com/active_users)"
+        active_url = "[https://farmer-auth-d295e48058cf.herokuapp.com/active_users](https://farmer-auth-d295e48058cf.herokuapp.com/active_users)"
         logger.info("Fetching active users: %s", active_url)
         
         timeout = aiohttp.ClientTimeout(total=5)
