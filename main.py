@@ -1,10 +1,9 @@
 import os
 import random
+import requests
 import logging
 import json
 import re
-import asyncio
-import aiohttp
 from flask import Flask, request, jsonify
 from urllib.parse import urlparse, quote
 
@@ -406,23 +405,17 @@ def add_cors_headers(response):
     return response
 
 # ----------------- New helper: fetch active users list and return usernames -----------------
-async def get_active_usernames():
+def get_active_usernames():
     """
     Fetch active users from the fixed auth service endpoint and return a list of
     sanitized usernames (each starting with '@'). Fail silently (log) and return [] on error.
-    Non-blocking version using aiohttp.
     """
     try:
-        # ✅ FIXED URL: Standard string without markdown
         active_url = "[https://farmer-auth-d295e48058cf.herokuapp.com/active_users](https://farmer-auth-d295e48058cf.herokuapp.com/active_users)"
         logger.info("Fetching active users: %s", active_url)
-        
-        timeout = aiohttp.ClientTimeout(total=5)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(active_url) as res:
-                res.raise_for_status()
-                payload = await res.json()
-        
+        res = requests.get(active_url, timeout=5)
+        res.raise_for_status()
+        payload = res.json()
         users = []
         for item in payload.get("active_users", []):
             uname = item.get("username")
@@ -448,7 +441,7 @@ async def get_active_usernames():
 # -----------------------------------------------------------------------------------------------
 
 @app.route("/<country_code>", methods=["POST", "GET"])
-async def handle_country_request(country_code):
+def handle_country_request(country_code):
     logger.info("Incoming %s %s for Country: %s", request.method, request.path, country_code)
 
     if request.method == "GET":
@@ -472,22 +465,19 @@ async def handle_country_request(country_code):
         return jsonify({"error": "Missing user"}), 400
 
 
-    # ✅ AUTH CHECK (FIXED URL ONLY) - ASYNC
+    # ✅ AUTH CHECK (FIXED URL ONLY)
     try:
         if not user.startswith("@"):
             user = "@" + user
 
         encoded_user = quote(user)
-        # ✅ FIXED URL: Standard string without markdown
         auth_url = f"[https://farmer-auth-d295e48058cf.herokuapp.com/check?user=](https://farmer-auth-d295e48058cf.herokuapp.com/check?user=){encoded_user}"
         logger.info("Auth check: %s", auth_url)
 
-        timeout = aiohttp.ClientTimeout(total=10)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(auth_url) as auth_res:
-                auth_res.raise_for_status()
-                auth_data = await auth_res.json()
-        
+        auth_res = requests.get(auth_url, timeout=10)
+        auth_res.raise_for_status()
+
+        auth_data = auth_res.json()
         logger.info("Auth response: %s", auth_data)
 
         if not auth_data.get("exists"):
@@ -507,7 +497,7 @@ async def handle_country_request(country_code):
     )
 
     # ----------------- fetch active users and build avoid block -----------------
-    active_usernames = await get_active_usernames()
+    active_usernames = get_active_usernames()
     avoid_block = ""
     if active_usernames:
         # Join with spaces so model sees them as separate tokens/usernames
@@ -592,40 +582,40 @@ async def handle_country_request(country_code):
     try:
         logger.info("Calling inference API for %s", country_code)
 
-        # ================= NEW API CALL (Copilot Model) - ASYNC =================
-        # ✅ FIXED URL: Standard string without markdown
+        # ================= NEW API CALL (Copilot Model) =================
+        # Replaces the previous POST /v1/chat/completions call
+        
+        # URL structure: [https://ai-chat.apisimpacientes.workers.dev/chat?model=copilot&prompt=](https://ai-chat.apisimpacientes.workers.dev/chat?model=copilot&prompt=)...
         api_url = "[https://ai-chat.apisimpacientes.workers.dev/chat](https://ai-chat.apisimpacientes.workers.dev/chat)"
         params = {
             "model": "copilot",
             "prompt": final_prompt
         }
 
-        timeout = aiohttp.ClientTimeout(total=20)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(api_url, params=params) as r:
-                r.raise_for_status()
+        r = requests.get(api_url, params=params, timeout=20)
+        r.raise_for_status()
 
-                # Handle various response formats since the worker API schema is implicit
-                try:
-                    ai_data = await r.json()
-                    
-                    # 1. Try standard OpenAI format (if wrapped)
-                    if "choices" in ai_data:
-                        output = ai_data["choices"][0]["message"]["content"]
-                    # 2. Try direct keys common in simple workers
-                    elif "response" in ai_data:
-                        output = ai_data["response"]
-                    elif "message" in ai_data:
-                        output = ai_data["message"]
-                    elif "content" in ai_data:
-                        output = ai_data["content"]
-                    # 3. Fallback to raw JSON string if structure is unknown
-                    else:
-                        output = str(ai_data)
-                except ValueError:
-                    # If not JSON, assume raw text response
-                    output = await r.text()
-        # ========================================================================
+        # Handle various response formats since the worker API schema is implicit
+        try:
+            ai_data = r.json()
+            
+            # 1. Try standard OpenAI format (if wrapped)
+            if "choices" in ai_data:
+                output = ai_data["choices"][0]["message"]["content"]
+            # 2. Try direct keys common in simple workers
+            elif "response" in ai_data:
+                output = ai_data["response"]
+            elif "message" in ai_data:
+                output = ai_data["message"]
+            elif "content" in ai_data:
+                output = ai_data["content"]
+            # 3. Fallback to raw JSON string if structure is unknown
+            else:
+                output = str(ai_data)
+        except ValueError:
+            # If not JSON, assume raw text response
+            output = r.text
+        # ================================================================
 
         output = output.strip()
         output = re.sub(r"^(As an AI|I'm an AI|I am an AI).*?\s*", "", output, flags=re.I)
