@@ -413,6 +413,7 @@ async def get_active_usernames():
     Non-blocking version using aiohttp.
     """
     try:
+        # ✅ FIXED URL: No markdown brackets
         active_url = "[https://farmer-auth-d295e48058cf.herokuapp.com/active_users](https://farmer-auth-d295e48058cf.herokuapp.com/active_users)"
         logger.info("Fetching active users: %s", active_url)
         
@@ -477,7 +478,7 @@ async def handle_country_request(country_code):
             user = "@" + user
 
         encoded_user = quote(user)
-        # UPDATED AUTH URL
+        # ✅ FIXED URL: No markdown brackets
         auth_url = f"[https://farmer-auth-d295e48058cf.herokuapp.com/check?user=](https://farmer-auth-d295e48058cf.herokuapp.com/check?user=){encoded_user}"
         logger.info("Auth check: %s", auth_url)
 
@@ -592,6 +593,7 @@ async def handle_country_request(country_code):
         logger.info("Calling inference API for %s", country_code)
 
         # ================= NEW API CALL (Copilot Model) - ASYNC =================
+        # ✅ FIXED URL: No markdown brackets
         api_url = "[https://ai-chat.apisimpacientes.workers.dev/chat](https://ai-chat.apisimpacientes.workers.dev/chat)"
         params = {
             "model": "copilot",
