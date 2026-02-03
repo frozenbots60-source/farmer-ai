@@ -337,6 +337,7 @@ Current chat context:
 - Your emotional state: {emotional_state} ({emotional_word})
 {mod_warning}
 {safety}
+{active_users_list}
 
 Select a message of a user and reply to that specific user by tagging them with @username (no parentheses).
 Based on these chat messages, respond with something VERY SHORT - maximum 5-6 words only. Don't explain anything.
@@ -563,11 +564,12 @@ async def handle_country_request(country_code):
             )
 
         elif mode == "general_tag":
-            final_prompt = avoid_block + GENERAL_TAG_PROMPT.format(
+            final_prompt = GENERAL_TAG_PROMPT.format(
                 persona=persona_filled,
                 vibe=vibe, topics=topics, behaviour_profile=behaviour,
                 memory=memory, emotional_state=e_state, emotional_word=e_word,
                 mod_warning=mod_warning, safety=SAFETY_INSTRUCTIONS,
+                active_users_list=avoid_block,
                 bot_history=bot_history,
                 recent_messages=recent_msgs,
                 last_bot_messages=last_bot_msgs,
