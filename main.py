@@ -707,10 +707,26 @@ async def handle_country_request(country_code):
                 
             except Exception as _e:
                 logger.warning("Judge logic filtering failed: %s", _e)
-            # ========================================================================
-
+            
             if len(output) > 200:
                 output = output[:197] + "..."
+
+            # ========================================================================
+            # NEW: CHECK AND STRIP @ FROM ACTIVE USERS (OTHER BOTS)
+            # ========================================================================
+            if active_usernames:
+                for active_bot in active_usernames:
+                    # active_bot format is like "@BotName"
+                    # We use regex to case-insensitively find the bot mention and remove the '@'
+                    if active_bot:
+                        # Escape the handle except the leading @ to avoid regex issues, 
+                        # though standard usernames are usually safe.
+                        # We search for the active_bot string (e.g. "@BotName")
+                        pattern = re.compile(re.escape(active_bot), re.IGNORECASE)
+                        # Replace it with just the name (e.g. "BotName")
+                        clean_name = active_bot.lstrip("@")
+                        output = pattern.sub(clean_name, output)
+            # ========================================================================
 
         return jsonify({"raw": {"response": output}}), 200
 
