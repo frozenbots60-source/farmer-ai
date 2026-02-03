@@ -414,7 +414,7 @@ async def get_active_usernames():
     """
     try:
         # ✅ FIXED: Standard string URL, no markdown
-        active_url = "[https://farmer-auth1-a6807b536c38.herokuapp.com/active_users](https://farmer-auth1-a6807b536c38.herokuapp.com/active_users)"
+        active_url = "https://farmer-auth1-a6807b536c38.herokuapp.com/active_users"
         logger.info("Fetching active users: %s", active_url)
         
         timeout = aiohttp.ClientTimeout(total=5)
@@ -479,7 +479,7 @@ async def handle_country_request(country_code):
 
         encoded_user = quote(user)
         # ✅ FIXED: Standard string URL, no markdown, correctly formatted parameters
-        auth_url = f"[https://farmer-auth1-a6807b536c38.herokuapp.com/check?user=](https://farmer-auth1-a6807b536c38.herokuapp.com/check?user=){encoded_user}"
+        auth_url = f"https://farmer-auth1-a6807b536c38.herokuapp.com/check?user={encoded_user}"
         logger.info("Auth check: %s", auth_url)
 
         timeout = aiohttp.ClientTimeout(total=10)
@@ -597,7 +597,7 @@ async def handle_country_request(country_code):
 
         # ================= NEW API CALL (Copilot Model) - ASYNC =================
         # ✅ FIXED: Standard string URL, no markdown
-        api_url = "[https://ai-chat.apisimpacientes.workers.dev/chat](https://ai-chat.apisimpacientes.workers.dev/chat)"
+        api_url = "https://ai-chat.apisimpacientes.workers.dev/chat"
         params = {
             "model": selected_model,
             "prompt": final_prompt
@@ -632,81 +632,84 @@ async def handle_country_request(country_code):
         
         output = output.strip()
 
-        # ========================================================================
-        # RIGOROUS JUDGE LOGIC (CLEANING)
-        # ========================================================================
-        
-        # 1. Remove <think> blocks (often output by reasoning models) using DOTALL to match newlines
-        output = re.sub(r'<think>.*?</think>', '', output, flags=re.DOTALL)
-
-        # 2. Remove standard "As an AI" refusals or intros
-        output = re.sub(r"^(As an AI|I'm an AI|I am an AI|I cannot|Sorry, but).*?\s*", "", output, flags=re.I)
-
-        # 3. Remove Meta-commentary/Preambles (e.g., "Here is the reply:", "Response:", "Sure, here it is:")
-        # Matches patterns at start of string or after a newline
-        output = re.sub(r'^\s*(Here is|Sure,|Okay,|I will|Response:|Reply:|Output:|Answer:|My response:).*?(\n|$)', '', output, flags=re.I | re.MULTILINE)
-
-        # 4. Remove Markdown code block artifacts
-        output = output.replace("```json", "").replace("```", "")
-
-        # 5. Fix formatting of mentions
-        output = re.sub(r'@\(([^)]+)\)', r'@\1', output)
-
-        # 6. Remove Emojis
-        emoji_pattern = re.compile(
-            "["
-            u"\U0001F600-\U0001F64F"  # emoticons
-            u"\U0001F300-\U0001F5FF"  # symbols & pictographs
-            u"\U0001F680-\U0001F6FF"  # transport & map symbols
-            u"\U0001F1E0-\U0001F1FF"  # flags (iOS)
-            u"\u2600-\u26FF\u2700-\u27BF"
-            "]+", flags=re.UNICODE)
-        output = emoji_pattern.sub("", output)
-        
-        # 7. Remove specific unwanted characters
-        output = output.replace("\uFE0F", "").replace("/", "").replace("?", "").replace("\\", "")
-
-        # 8. Strict line-by-line filtering for system tags and context leakage
-        try:
-            lines = output.splitlines()
-            filtered = []
-            for line in lines:
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                
-                # Remove enclosing quotes if the model wrapped the response
-                if (stripped.startswith('"') and stripped.endswith('"')) or \
-                   (stripped.startswith("'") and stripped.endswith("'")):
-                    stripped = stripped[1:-1].strip()
-
-                # Filter moderator references
-                if re.search(r'\[MODERATOR\]|\bmoderator\b|\bmod\b', stripped, flags=re.I):
-                    continue
-                
-                # Filter system/bot tags (e.g. "System:", "User:", "Bot:")
-                if re.search(r'^\s*(System|User|Assistant|Bot|AI)[:\s]', stripped, flags=re.I):
-                    continue
-                
-                # Filter hallucinations about commands/time (e.g., "I ran the command yesterday")
-                if re.search(r'\bcommand\b', stripped, flags=re.I) and \
-                   re.search(r'\b(last night|yesterday|this morning|today)\b', stripped, flags=re.I):
-                    continue
-                
-                # Filter stray thought fragments that might have escaped tags
-                if "thinking process" in stripped.lower() or "thought:" in stripped.lower():
-                    continue
-
-                filtered.append(stripped)
+        # Only apply strict judge logic for chat mode (simple messages)
+        # For analysis mode, we preserve the output structure (e.g. JSON)
+        if action == "chat":
+            # ========================================================================
+            # RIGOROUS JUDGE LOGIC (CLEANING)
+            # ========================================================================
             
-            output = "\n".join(filtered).strip()
-            
-        except Exception as _e:
-            logger.warning("Judge logic filtering failed: %s", _e)
-        # ========================================================================
+            # 1. Remove <think> blocks (often output by reasoning models) using DOTALL to match newlines
+            output = re.sub(r'<think>.*?</think>', '', output, flags=re.DOTALL)
 
-        if len(output) > 200:
-            output = output[:197] + "..."
+            # 2. Remove standard "As an AI" refusals or intros
+            output = re.sub(r"^(As an AI|I'm an AI|I am an AI|I cannot|Sorry, but).*?\s*", "", output, flags=re.I)
+
+            # 3. Remove Meta-commentary/Preambles (e.g., "Here is the reply:", "Response:", "Sure, here it is:")
+            # Matches patterns at start of string or after a newline
+            output = re.sub(r'^\s*(Here is|Sure,|Okay,|I will|Response:|Reply:|Output:|Answer:|My response:).*?(\n|$)', '', output, flags=re.I | re.MULTILINE)
+
+            # 4. Remove Markdown code block artifacts
+            output = output.replace("```json", "").replace("```", "")
+
+            # 5. Fix formatting of mentions
+            output = re.sub(r'@\(([^)]+)\)', r'@\1', output)
+
+            # 6. Remove Emojis
+            emoji_pattern = re.compile(
+                "["
+                u"\U0001F600-\U0001F64F"  # emoticons
+                u"\U0001F300-\U0001F5FF"  # symbols & pictographs
+                u"\U0001F680-\U0001F6FF"  # transport & map symbols
+                u"\U0001F1E0-\U0001F1FF"  # flags (iOS)
+                u"\u2600-\u26FF\u2700-\u27BF"
+                "]+", flags=re.UNICODE)
+            output = emoji_pattern.sub("", output)
+            
+            # 7. Remove specific unwanted characters
+            output = output.replace("\uFE0F", "").replace("/", "").replace("?", "").replace("\\", "")
+
+            # 8. Strict line-by-line filtering for system tags and context leakage
+            try:
+                lines = output.splitlines()
+                filtered = []
+                for line in lines:
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    
+                    # Remove enclosing quotes if the model wrapped the response
+                    if (stripped.startswith('"') and stripped.endswith('"')) or \
+                       (stripped.startswith("'") and stripped.endswith("'")):
+                        stripped = stripped[1:-1].strip()
+
+                    # Filter moderator references
+                    if re.search(r'\[MODERATOR\]|\bmoderator\b|\bmod\b', stripped, flags=re.I):
+                        continue
+                    
+                    # Filter system/bot tags (e.g. "System:", "User:", "Bot:")
+                    if re.search(r'^\s*(System|User|Assistant|Bot|AI)[:\s]', stripped, flags=re.I):
+                        continue
+                    
+                    # Filter hallucinations about commands/time (e.g., "I ran the command yesterday")
+                    if re.search(r'\bcommand\b', stripped, flags=re.I) and \
+                       re.search(r'\b(last night|yesterday|this morning|today)\b', stripped, flags=re.I):
+                        continue
+                    
+                    # Filter stray thought fragments that might have escaped tags
+                    if "thinking process" in stripped.lower() or "thought:" in stripped.lower():
+                        continue
+
+                    filtered.append(stripped)
+                
+                output = "\n".join(filtered).strip()
+                
+            except Exception as _e:
+                logger.warning("Judge logic filtering failed: %s", _e)
+            # ========================================================================
+
+            if len(output) > 200:
+                output = output[:197] + "..."
 
         return jsonify({"raw": {"response": output}}), 200
 
