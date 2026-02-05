@@ -526,7 +526,7 @@ async def handle_country_request(country_code):
         )
 
     elif action == "chat":
-        selected_model = "groq"
+        selected_model = "mk"
         vibe = data.get("vibe", "neutral")
         topics = data.get("topics", "none")
         behaviour = data.get("behaviour_profile", "friendly")
