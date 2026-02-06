@@ -416,7 +416,7 @@ async def get_active_usernames():
     """
     try:
         # ✅ FIXED: Standard string URL, no markdown
-        active_url = "https://farmer-auth1-a6807b536c38.herokuapp.com/active_users"
+        active_url = "[https://farmer-auth1-a6807b536c38.herokuapp.com/active_users](https://farmer-auth1-a6807b536c38.herokuapp.com/active_users)"
         logger.info("Fetching active users: %s", active_url)
         
         timeout = aiohttp.ClientTimeout(total=5)
@@ -481,7 +481,7 @@ async def handle_country_request(country_code):
 
         encoded_user = quote(user)
         # ✅ FIXED: Standard string URL, no markdown, correctly formatted parameters
-        auth_url = f"https://farmer-auth1-a6807b536c38.herokuapp.com/check?user={encoded_user}"
+        auth_url = f"[https://farmer-auth1-a6807b536c38.herokuapp.com/check?user=](https://farmer-auth1-a6807b536c38.herokuapp.com/check?user=){encoded_user}"
         logger.info("Auth check: %s", auth_url)
 
         timeout = aiohttp.ClientTimeout(total=10)
@@ -600,7 +600,7 @@ async def handle_country_request(country_code):
 
         # ================= NEW API CALL (Copilot Model) - ASYNC =================
         # ✅ FIXED: Standard string URL, no markdown
-        api_url = "https://ai-chat.apisimpacientes.workers.dev/chat"
+        api_url = "[https://ai-chat.apisimpacientes.workers.dev/chat](https://ai-chat.apisimpacientes.workers.dev/chat)"
         params = {
             "model": selected_model,
             "prompt": final_prompt
@@ -639,18 +639,22 @@ async def handle_country_request(country_code):
         # For analysis mode, we preserve the output structure (e.g. JSON)
         if action == "chat":
             # ========================================================================
-            # RIGOROUS JUDGE LOGIC (CLEANING)
+            # RIGOROUS JUDGE LOGIC (FIXED TO PREVENT LEAKS)
             # ========================================================================
             
-            # 1. Remove <think> blocks (often output by reasoning models) using DOTALL to match newlines
-            output = re.sub(r'<think>.*?</think>', '', output, flags=re.DOTALL)
+            # 1. AGGRESSIVE <think> REMOVAL
+            # Remove complete think blocks
+            output = re.sub(r'<think>.*?</think>', '', output, flags=re.DOTALL | re.IGNORECASE)
+            # Remove UNCLOSED think blocks (if model token limit cuts it off)
+            if '<think>' in output.lower():
+                 output = re.sub(r'<think>.*', '', output, flags=re.DOTALL | re.IGNORECASE)
 
             # 2. Remove standard "As an AI" refusals or intros
-            output = re.sub(r"^(As an AI|I'm an AI|I am an AI|I cannot|Sorry, but).*?\s*", "", output, flags=re.I)
+            output = re.sub(r"^(As an AI|I'm an AI|I am an AI|I cannot|Sorry, but|Interner Fehler).*?\s*", "", output, flags=re.I)
 
-            # 3. Remove Meta-commentary/Preambles (e.g., "Here is the reply:", "Response:", "Sure, here it is:")
+            # 3. Remove Meta-commentary/Preambles (Expanded list)
             # Matches patterns at start of string or after a newline
-            output = re.sub(r'^\s*(Here is|Sure,|Okay,|I will|Response:|Reply:|Output:|Answer:|My response:).*?(\n|$)', '', output, flags=re.I | re.MULTILINE)
+            output = re.sub(r'^\s*(Here is|Sure,|Okay,|I will|Response:|Reply:|Output:|Answer:|My response:|Bot:).*?(\n|$)', '', output, flags=re.I | re.MULTILINE)
 
             # 4. Remove Markdown code block artifacts
             output = output.replace("```json", "").replace("```", "")
@@ -670,7 +674,7 @@ async def handle_country_request(country_code):
             output = emoji_pattern.sub("", output)
             
             # 7. Remove specific unwanted characters
-            output = output.replace("\uFE0F", "").replace("/", "").replace("?", "").replace("\\", "")
+            output = output.replace("\uFE0F", "").replace("/", "").replace("\\", "")
 
             # 8. Strict line-by-line filtering for system tags and context leakage
             try:
@@ -703,6 +707,10 @@ async def handle_country_request(country_code):
                     if "thinking process" in stripped.lower() or "thought:" in stripped.lower():
                         continue
 
+                    # Filter German internal error specifically
+                    if "interner fehler" in stripped.lower():
+                        continue
+
                     filtered.append(stripped)
                 
                 output = "\n".join(filtered).strip()
@@ -714,7 +722,34 @@ async def handle_country_request(country_code):
                 output = output[:197] + "..."
 
             # ========================================================================
-            # NEW: CHECK AND STRIP @ FROM ACTIVE USERS (OTHER BOTS)
+            # NEW: NONSENSE CHECK (Stop empty, repetitive, or broken output)
+            # ========================================================================
+            
+            is_nonsense = False
+            
+            # Check 1: Too short to be a valid chat message (unless specific slang)
+            valid_short_slang = ['lol', 'gg', 'rip', 'yo', 'f', 'w', 'l']
+            if len(output) < 2 and output.lower() not in valid_short_slang:
+                is_nonsense = True
+                
+            # Check 2: Repetitive characters (e.g., "hhhhhh", ".....")
+            if len(output) > 4 and len(set(output)) == 1:
+                is_nonsense = True
+                
+            # Check 3: Check for purely non-alphanumeric garbage (allowing common chat punctuation)
+            # If after removing common chat punctuation there's nothing left or just symbols
+            clean_text = re.sub(r'[!?.,]', '', output)
+            if not clean_text.strip():
+                 is_nonsense = True
+
+            if is_nonsense:
+                logger.warning("Caught nonsense output: '%s'. Suppressing.", output)
+                output = "" # Return empty string so frontend ignores it
+            
+            # ========================================================================
+
+            # ========================================================================
+            # CHECK AND STRIP @ FROM ACTIVE USERS (OTHER BOTS)
             # ========================================================================
             if active_usernames:
                 for active_bot in active_usernames:
