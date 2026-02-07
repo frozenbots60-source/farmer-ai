@@ -18,6 +18,12 @@ logger = logging.getLogger("CHAT-FARMER")
 
 app = Flask(__name__)
 
+# ================== API CONFIGURATION ===================
+# Primary API is hardcoded in the logic below.
+# Backup API Configuration:
+BACKUP_API_BASE = "https://YOUR_BACKUP_HOST_URL_HERE"  # <--- ENTER YOUR BACKUP API HOST HERE
+# Example: "https://copilot-api.example.com"
+
 # ================== COUNTRY CONFIGURATION ===================
 COUNTRY_CONFIG = {
     "de": {
@@ -416,7 +422,7 @@ async def get_active_usernames():
     """
     try:
         # ✅ FIXED: Standard string URL, no markdown
-        active_url = "https://farmer-auth1-a6807b536c38.herokuapp.com/active_users"
+        active_url = "[https://farmer-auth1-a6807b536c38.herokuapp.com/active_users](https://farmer-auth1-a6807b536c38.herokuapp.com/active_users)"
         logger.info("Fetching active users: %s", active_url)
         
         timeout = aiohttp.ClientTimeout(total=5)
@@ -481,7 +487,7 @@ async def handle_country_request(country_code):
 
         encoded_user = quote(user)
         # ✅ FIXED: Standard string URL, no markdown, correctly formatted parameters
-        auth_url = f"https://farmer-auth1-a6807b536c38.herokuapp.com/check?user={encoded_user}"
+        auth_url = f"[https://farmer-auth1-a6807b536c38.herokuapp.com/check?user=](https://farmer-auth1-a6807b536c38.herokuapp.com/check?user=){encoded_user}"
         logger.info("Auth check: %s", auth_url)
 
         timeout = aiohttp.ClientTimeout(total=10)
@@ -596,41 +602,71 @@ async def handle_country_request(country_code):
 
 
     try:
-        logger.info("Calling inference API for %s with model %s", country_code, selected_model)
+        output = ""
+        used_api = "primary"
+        
+        # ================= PRIMARY API CALL (Workers) - ASYNC =================
+        try:
+            logger.info("Calling PRIMARY inference API for %s with model %s", country_code, selected_model)
+            api_url = "[https://ai-chat.apisimpacientes.workers.dev/chat](https://ai-chat.apisimpacientes.workers.dev/chat)"
+            params = {
+                "model": selected_model,
+                "prompt": final_prompt
+            }
 
-        # ================= NEW API CALL (Copilot Model) - ASYNC =================
-        # ✅ FIXED: Standard string URL, no markdown
-        api_url = "https://ai-chat.apisimpacientes.workers.dev/chat"
-        params = {
-            "model": selected_model,
-            "prompt": final_prompt
-        }
+            timeout = aiohttp.ClientTimeout(total=20)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(api_url, params=params) as r:
+                    r.raise_for_status()
 
-        timeout = aiohttp.ClientTimeout(total=20)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(api_url, params=params) as r:
-                r.raise_for_status()
+                    # Handle various response formats
+                    try:
+                        ai_data = await r.json()
+                        if "choices" in ai_data:
+                            output = ai_data["choices"][0]["message"]["content"]
+                        elif "response" in ai_data:
+                            output = ai_data["response"]
+                        elif "message" in ai_data:
+                            output = ai_data["message"]
+                        elif "content" in ai_data:
+                            output = ai_data["content"]
+                        else:
+                            output = str(ai_data)
+                    except ValueError:
+                        output = await r.text()
+                        
+        except Exception as e:
+            logger.warning("Primary API Failed: %s. Switching to BACKUP API.", e)
+            used_api = "backup"
+            
+            # ================= BACKUP API CALL (Copilot) - ASYNC =================
+            try:
+                # Map action to mode: 'analyze' -> 'smart', everything else -> 'chat'
+                backup_mode = "smart" if action == "analyze" else "chat"
+                
+                if "YOUR_BACKUP_HOST_URL" in BACKUP_API_BASE:
+                    logger.error("Backup API URL not configured! Please set BACKUP_API_BASE.")
+                    raise ValueError("Backup API URL not configured")
 
-                # Handle various response formats since the worker API schema is implicit
-                try:
-                    ai_data = await r.json()
-                    
-                    # 1. Try standard OpenAI format (if wrapped)
-                    if "choices" in ai_data:
-                        output = ai_data["choices"][0]["message"]["content"]
-                    # 2. Try direct keys common in simple workers
-                    elif "response" in ai_data:
-                        output = ai_data["response"]
-                    elif "message" in ai_data:
-                        output = ai_data["message"]
-                    elif "content" in ai_data:
-                        output = ai_data["content"]
-                    # 3. Fallback to raw JSON string if structure is unknown
-                    else:
-                        output = str(ai_data)
-                except ValueError:
-                    # If not JSON, assume raw text response
-                    output = await r.text()
+                backup_url = f"{BACKUP_API_BASE.rstrip('/')}/{backup_mode}"
+                logger.info("Calling BACKUP inference API: %s", backup_url)
+                
+                params = {"prompt": final_prompt}
+                
+                timeout = aiohttp.ClientTimeout(total=20)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(backup_url, params=params) as r:
+                        r.raise_for_status()
+                        ai_data = await r.json()
+                        # Backup API returns data in "response" field
+                        output = ai_data.get("response", "")
+                        if not output:
+                            output = str(ai_data) # Fallback if structure differs
+                            
+            except Exception as backup_e:
+                logger.error("Backup API also failed: %s", backup_e)
+                return jsonify({"error": "All inference APIs failed", "primary_error": str(e), "backup_error": str(backup_e)}), 500
+
         # ========================================================================
         
         output = output.strip()
@@ -765,7 +801,7 @@ async def handle_country_request(country_code):
                         output = pattern.sub(clean_name, output)
             # ========================================================================
 
-        return jsonify({"raw": {"response": output}}), 200
+        return jsonify({"raw": {"response": output, "source": used_api}}), 200
 
     except Exception as e:
         logger.exception("Inference API failure")
