@@ -21,7 +21,7 @@ app = Flask(__name__)
 # ================== API CONFIGURATION ===================
 # Primary API is hardcoded in the logic below.
 # Backup API Configuration:
-BACKUP_API_BASE = "https://YOUR_BACKUP_HOST_URL_HERE"  # <--- ENTER YOUR BACKUP API HOST HERE
+BACKUP_API_BASE = "https://copilot-ai-two.vercel.app"  # <--- ENTER YOUR BACKUP API HOST HERE
 # Example: "https://copilot-api.example.com"
 
 # ================== COUNTRY CONFIGURATION ===================
@@ -422,7 +422,7 @@ async def get_active_usernames():
     """
     try:
         # ✅ FIXED: Standard string URL, no markdown
-        active_url = "[https://farmer-auth1-a6807b536c38.herokuapp.com/active_users](https://farmer-auth1-a6807b536c38.herokuapp.com/active_users)"
+        active_url = "https://farmer-auth1-a6807b536c38.herokuapp.com/active_users"
         logger.info("Fetching active users: %s", active_url)
         
         timeout = aiohttp.ClientTimeout(total=5)
@@ -487,7 +487,7 @@ async def handle_country_request(country_code):
 
         encoded_user = quote(user)
         # ✅ FIXED: Standard string URL, no markdown, correctly formatted parameters
-        auth_url = f"[https://farmer-auth1-a6807b536c38.herokuapp.com/check?user=](https://farmer-auth1-a6807b536c38.herokuapp.com/check?user=){encoded_user}"
+        auth_url = f"https://farmer-auth1-a6807b536c38.herokuapp.com/check?user={encoded_user}"
         logger.info("Auth check: %s", auth_url)
 
         timeout = aiohttp.ClientTimeout(total=10)
@@ -608,7 +608,7 @@ async def handle_country_request(country_code):
         # ================= PRIMARY API CALL (Workers) - ASYNC =================
         try:
             logger.info("Calling PRIMARY inference API for %s with model %s", country_code, selected_model)
-            api_url = "[https://ai-chat.apisimpacientes.workers.dev/chat](https://ai-chat.apisimpacientes.workers.dev/chat)"
+            api_url = "https://ai-chat.apisimpacientes.workers.dev/chat"
             params = {
                 "model": selected_model,
                 "prompt": final_prompt
