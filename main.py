@@ -205,7 +205,7 @@ COUNTRY_CONFIG = {
         "lang": "Hinglish (Indian Casual)",
         "vibe": "Authentic Desi gambler. Uses 'Bhai', 'Yaar', 'Arre', 'Mast', 'Sahi hai', 'Lagg gaye'. Casual, uses 'tu' not 'aap'. Abbr: 'kya', 'n', 'h', 'thx'.",
         "questions": [
-            "kya bolti public", "aaj 500 ka loss ho gaya yaar", "koi tips hai kya", 
+            "kya bolti public", "aaj 500 ka loss ho gaya yaar", "koi sports khal ra", 
             "bhai log kya scene hai", "sahi hai boss"
         ]
     }
