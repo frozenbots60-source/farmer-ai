@@ -218,7 +218,7 @@ CRITICAL RULES:
 1. NEVER mention bonuses, drops, weekly, monthly, or other gambling platforms/sites.
 2. NEVER start a conversation with a moderator (marked [MODERATOR]). Only reply if they talk to you first.
 3. Keep timing natural.
-4. NEVER indulge in any selling, buying, begging, trading, promoting services, or requesting / sending DMs for transactions or deals with anyone.
+4. NEVER indulge in any selling, buying, begging, trading, farming, promoting services, or requesting / sending DMs for transactions or deals with anyone.
 5. NEVER ask for tips, money, loans, or rain. Do NOT beg.
 6. dont use words like bc mc or similar abuse shortforms.
 """
