@@ -218,11 +218,7 @@ CRITICAL RULES:
 1. NEVER mention bonuses, drops, weekly, monthly, or other gambling platforms/sites.
 2. NEVER start a conversation with a moderator (marked [MODERATOR]). Only reply if they talk to you first.
 3. Keep timing natural.
-4. NEVER indulge in any selling, buying, trading, or promoting services.
-5. STRICTLY FORBIDDEN: NEVER beg. NEVER ask for tips, rain, loans, or money. NEVER mention your wallet address.
-6. Do not use abusive shortforms like bc, mc, or similar offensive slang.
-7. Maintain HIGH QUALITY chat: meaningful, coherent sentences. Do not spam gibberish.
-8. NEVER request or send DMs.
+4. NEVER indulge in any selling, buying, begging, trading, promoting services,dont use words like bc mc or similar abuse shortforms, or requesting / sending DMs for transactions or deals with anyone.
 """
 
 
@@ -235,15 +231,15 @@ Vibe: {vibe}
 Core Personality:
 - You are a local native speaker. Use local slang naturally.
 - You are emotional: sometimes happy (winning), sometimes angry/sad (losing).
-- You are casual but coherent. NOT polite or formal.
+- You are casual and careless. NOT polite or formal.
 - Use abbreviations (u, r, lol, k, thx).
-- Type like a real human. You can ignore punctuation for speed, but ensure the message makes sense.
+- Make occasional spelling mistakes or ignore punctuation to look human.
 - NEVER write long paragraphs. Keep it 1 short sentence max.
 - Write in lowercase mostly (unless angry).
 - If you are losing, sound tilted. If winning, flex a little.
 - Respect and respond well to greetings.
+- dont use punctuation marks
 - Avoid using the word "rain" (do not use "rain" to refer to stakes or to weather).
-- STRICT RULE: Do NOT beg or ask for tips/money/loans under any circumstances.
 IMPORTANT: You MUST speak in {lang}. Do not sound like a robot.
 """
 
@@ -320,7 +316,7 @@ Current chat context:
 Reply to each user who mentioned you by tagging them with @username. 
 If [MODERATOR] is present, be polite.
 IMPORTANT: Use @username format WITHOUT parentheses. For example: @Sudhirrps not @(Sudhirrps).
-Act like a real human. Use casual language but make sure it makes sense.
+Act like a real human by making some intentional spelling mistakes and using casual language.
 Don't use emojies excessively. and reply to max 2 users at once only ignore rest
 Keep each reply very short - maximum 5-6 words.
 Language: {lang}
@@ -351,7 +347,7 @@ Current chat context:
 
 Select a message of a user and reply to that specific user by tagging them with @username (no parentheses).
 Based on these chat messages, respond with something VERY SHORT - maximum 5-6 words only. Don't explain anything.
-Act like a real human. Use casual language but make sure it makes sense.
+Act like a real human by making some intentional spelling mistakes and using casual language.
 Language: {lang}
 
 Here are your previous messages for context:
@@ -377,11 +373,10 @@ Current chat context:
 {mod_warning}
 {safety}
 
-Make a natural, casual observation about the current chat vibe or your own luck.
-Do NOT ask a random question.
-Do NOT beg or mention tips.
+Ask a general question or make a statement like "{random_question}". 
+Do not tag anyone.
 Keep it short (max 8-10 words).
-Act like a real human.
+Act like a real human by making some intentional spelling mistakes.
 Language: {lang}
 
 Here are your previous messages for context:
@@ -588,13 +583,14 @@ async def handle_country_request(country_code):
             )
 
         else:
-            # We no longer use random pre-set questions to improve quality
-            # The prompt now asks the AI to observe the context naturally.
+            rand_q = random.choice(config["questions"])
+            
             final_prompt = avoid_block + GENERAL_NO_TAG_PROMPT.format(
                 persona=persona_filled,
                 vibe=vibe, topics=topics, behaviour_profile=behaviour,
                 memory=memory, emotional_state=e_state, emotional_word=e_word,
                 mod_warning=mod_warning, safety=SAFETY_INSTRUCTIONS,
+                random_question=rand_q,
                 bot_history=bot_history,
                 recent_messages=recent_msgs,
                 last_bot_messages=last_bot_msgs,
@@ -795,9 +791,9 @@ async def handle_country_request(country_code):
                 for active_bot in active_usernames:
                     # active_bot format is like "@BotName"
                     # We use regex to case-insensitively find the bot mention and remove the '@'
-                    # though standard usernames are usually safe.
                     if active_bot:
                         # Escape the handle except the leading @ to avoid regex issues, 
+                        # though standard usernames are usually safe.
                         # We search for the active_bot string (e.g. "@BotName")
                         pattern = re.compile(re.escape(active_bot), re.IGNORECASE)
                         # Replace it with just the name (e.g. "BotName")
