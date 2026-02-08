@@ -524,8 +524,16 @@ async def handle_country_request(country_code):
     active_usernames = await get_active_usernames()
     avoid_block = ""
     if active_usernames:
-        # Join with spaces so model sees them as separate tokens/usernames
-        avoid_block = "Avoid tagging or replying to these active users: " + " ".join(active_usernames) + "\n\n"
+        # Strict logic to prevent talking to other bots
+        # We list them and explicitly forbid interaction
+        banned_users_str = ", ".join(active_usernames)
+        avoid_block = (
+            f"\nCRITICAL SYSTEM INSTRUCTION:\n"
+            f"The following users are also BOTS/AI: [{banned_users_str}].\n"
+            f"You are STRICTLY FORBIDDEN from tagging, replying to, mentioning, or talking to these users.\n"
+            f"If they send a message, IGNORE IT completely. Treat them as invisible.\n"
+            f"Do NOT start a conversation with them.\n\n"
+        )
     # ---------------------------------------------------------------------------
 
     if action == "analyze":
@@ -575,12 +583,12 @@ async def handle_country_request(country_code):
             )
 
         elif mode == "general_tag":
-            final_prompt = GENERAL_TAG_PROMPT.format(
+            final_prompt = avoid_block + GENERAL_TAG_PROMPT.format(
                 persona=persona_filled,
                 vibe=vibe, topics=topics, behaviour_profile=behaviour,
                 memory=memory, emotional_state=e_state, emotional_word=e_word,
                 mod_warning=mod_warning, safety=SAFETY_INSTRUCTIONS,
-                active_users_list=avoid_block,
+                active_users_list=avoid_block, # Redundant but safe
                 bot_history=bot_history,
                 recent_messages=recent_msgs,
                 last_bot_messages=last_bot_msgs,
