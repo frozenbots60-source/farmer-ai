@@ -218,7 +218,9 @@ CRITICAL RULES:
 1. NEVER mention bonuses, drops, weekly, monthly, or other gambling platforms/sites.
 2. NEVER start a conversation with a moderator (marked [MODERATOR]). Only reply if they talk to you first.
 3. Keep timing natural.
-4. NEVER indulge in any selling, buying, begging, trading, promoting services,dont use words like bc mc or similar abuse shortforms, or requesting / sending DMs for transactions or deals with anyone.
+4. NEVER indulge in any selling, buying, begging, trading, promoting services, or requesting / sending DMs for transactions or deals with anyone.
+5. NEVER ask for tips, money, loans, or rain. Do NOT beg.
+6. dont use words like bc mc or similar abuse shortforms.
 """
 
 
@@ -373,7 +375,10 @@ Current chat context:
 {mod_warning}
 {safety}
 
-Ask a general question or make a statement like "{random_question}". 
+Ask a general question or make a statement fitting for the chat.
+Here are some EXAMPLES of the expected style/slang (DO NOT COPY THESE EXACTLY, GENERATE A NEW UNIQUE MESSAGE):
+[{style_examples}]
+
 Do not tag anyone.
 Keep it short (max 8-10 words).
 Act like a real human by making some intentional spelling mistakes.
@@ -422,7 +427,7 @@ async def get_active_usernames():
     """
     try:
         # ✅ FIXED: Standard string URL, no markdown
-        active_url = "https://farmer-auth1-a6807b536c38.herokuapp.com/active_users"
+        active_url = "[https://farmer-auth1-a6807b536c38.herokuapp.com/active_users](https://farmer-auth1-a6807b536c38.herokuapp.com/active_users)"
         logger.info("Fetching active users: %s", active_url)
         
         timeout = aiohttp.ClientTimeout(total=5)
@@ -487,7 +492,7 @@ async def handle_country_request(country_code):
 
         encoded_user = quote(user)
         # ✅ FIXED: Standard string URL, no markdown, correctly formatted parameters
-        auth_url = f"https://farmer-auth1-a6807b536c38.herokuapp.com/check?user={encoded_user}"
+        auth_url = f"[https://farmer-auth1-a6807b536c38.herokuapp.com/check?user=](https://farmer-auth1-a6807b536c38.herokuapp.com/check?user=){encoded_user}"
         logger.info("Auth check: %s", auth_url)
 
         timeout = aiohttp.ClientTimeout(total=10)
@@ -583,14 +588,17 @@ async def handle_country_request(country_code):
             )
 
         else:
-            rand_q = random.choice(config["questions"])
+            # Pick a few random examples from the config to guide style, but NOT to copy directly.
+            # This ensures live generation instead of regurgitating the same list.
+            style_samples = random.sample(config["questions"], min(3, len(config["questions"])))
+            style_examples_str = " | ".join(style_samples)
             
             final_prompt = avoid_block + GENERAL_NO_TAG_PROMPT.format(
                 persona=persona_filled,
                 vibe=vibe, topics=topics, behaviour_profile=behaviour,
                 memory=memory, emotional_state=e_state, emotional_word=e_word,
                 mod_warning=mod_warning, safety=SAFETY_INSTRUCTIONS,
-                random_question=rand_q,
+                style_examples=style_examples_str,
                 bot_history=bot_history,
                 recent_messages=recent_msgs,
                 last_bot_messages=last_bot_msgs,
@@ -608,7 +616,7 @@ async def handle_country_request(country_code):
         # ================= PRIMARY API CALL (Workers) - ASYNC =================
         try:
             logger.info("Calling PRIMARY inference API for %s with model %s", country_code, selected_model)
-            api_url = "https://ai-chat.apisimpacientes.workers.dev/chat"
+            api_url = "[https://ai-chat.apisimpacientes.workers.dev/chat](https://ai-chat.apisimpacientes.workers.dev/chat)"
             params = {
                 "model": selected_model,
                 "prompt": final_prompt
