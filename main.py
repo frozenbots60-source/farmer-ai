@@ -621,211 +621,210 @@ async def handle_country_request(country_code):
         output = ""
         used_api = "primary"
         
-        # ================= PRIMARY API CALL (Workers) - ASYNC =================
-        try:
-            logger.info("Calling PRIMARY inference API for %s with model %s", country_code, selected_model)
-            api_url = "https://ai-chat.apisimpacientes.workers.dev/chat"
-            params = {
-                "model": selected_model,
-                "prompt": final_prompt
-            }
+        # ========================================================================
+        # RETRY LOOP: WRAP API CALLS AND CHECK FOR BOT MENTIONS (MAX 3 ATTEMPTS)
+        # ========================================================================
+        max_retries = 3
+        # If action is analyze, we don't need retry logic for mentions, just run once
+        loop_count = 1 if action == "analyze" else max_retries
 
-            timeout = aiohttp.ClientTimeout(total=20)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(api_url, params=params) as r:
-                    r.raise_for_status()
-
-                    # Handle various response formats
-                    try:
-                        ai_data = await r.json()
-                        if "choices" in ai_data:
-                            output = ai_data["choices"][0]["message"]["content"]
-                        elif "response" in ai_data:
-                            output = ai_data["response"]
-                        elif "message" in ai_data:
-                            output = ai_data["message"]
-                        elif "content" in ai_data:
-                            output = ai_data["content"]
-                        else:
-                            output = str(ai_data)
-                    except ValueError:
-                        output = await r.text()
-                        
-        except Exception as e:
-            logger.warning("Primary API Failed: %s. Switching to BACKUP API.", e)
-            used_api = "backup"
+        for attempt in range(loop_count):
             
-            # ================= BACKUP API CALL (Copilot) - ASYNC =================
+            # ================= PRIMARY API CALL (Workers) - ASYNC =================
             try:
-                # Map action to mode: 'analyze' -> 'smart', everything else -> 'chat'
-                backup_mode = "smart" if action == "analyze" else "chat"
-                
-                if "YOUR_BACKUP_HOST_URL" in BACKUP_API_BASE:
-                    logger.error("Backup API URL not configured! Please set BACKUP_API_BASE.")
-                    raise ValueError("Backup API URL not configured")
+                logger.info("Calling PRIMARY inference API for %s with model %s (Attempt %d)", country_code, selected_model, attempt + 1)
+                api_url = "https://ai-chat.apisimpacientes.workers.dev/chat"
+                params = {
+                    "model": selected_model,
+                    "prompt": final_prompt
+                }
 
-                backup_url = f"{BACKUP_API_BASE.rstrip('/')}/{backup_mode}"
-                logger.info("Calling BACKUP inference API: %s", backup_url)
-                
-                params = {"prompt": final_prompt}
-                
                 timeout = aiohttp.ClientTimeout(total=20)
                 async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.get(backup_url, params=params) as r:
+                    async with session.get(api_url, params=params) as r:
                         r.raise_for_status()
-                        ai_data = await r.json()
-                        
-                        # ✅ FIXED: Prevent leaking "no response generated" or raw JSON strings
-                        # Prioritize finding the correct content field
-                        output = ai_data.get("response") or ai_data.get("message") or ai_data.get("content") or ""
-                        
-                        # If output matches specific failure keywords or is empty, set to empty string
-                        # DO NOT fallback to str(ai_data) which causes the leak
-                        if not output or (isinstance(output, str) and "no response generated" in output.lower()):
-                            logger.warning("Backup API returned invalid content: %s", ai_data)
-                            output = "" 
+
+                        # Handle various response formats
+                        try:
+                            ai_data = await r.json()
+                            if "choices" in ai_data:
+                                output = ai_data["choices"][0]["message"]["content"]
+                            elif "response" in ai_data:
+                                output = ai_data["response"]
+                            elif "message" in ai_data:
+                                output = ai_data["message"]
+                            elif "content" in ai_data:
+                                output = ai_data["content"]
+                            else:
+                                output = str(ai_data)
+                        except ValueError:
+                            output = await r.text()
                             
-            except Exception as backup_e:
-                logger.error("Backup API also failed: %s", backup_e)
-                return jsonify({"error": "All inference APIs failed", "primary_error": str(e), "backup_error": str(backup_e)}), 500
-
-        # ========================================================================
-        
-        output = str(output).strip()
-
-        # Only apply strict judge logic for chat mode (simple messages)
-        # For analysis mode, we preserve the output structure (e.g. JSON)
-        if action == "chat":
-            # ========================================================================
-            # RIGOROUS JUDGE LOGIC (FIXED TO PREVENT LEAKS)
-            # ========================================================================
-            
-            # 1. AGGRESSIVE <think> REMOVAL
-            # Remove complete think blocks
-            output = re.sub(r'<think>.*?</think>', '', output, flags=re.DOTALL | re.IGNORECASE)
-            # Remove UNCLOSED think blocks (if model token limit cuts it off)
-            if '<think>' in output.lower():
-                 output = re.sub(r'<think>.*', '', output, flags=re.DOTALL | re.IGNORECASE)
-
-            # 2. Remove standard "As an AI" refusals or intros
-            output = re.sub(r"^(As an AI|I'm an AI|I am an AI|I cannot|Sorry, but|Interner Fehler).*?\s*", "", output, flags=re.I)
-
-            # 3. Remove Meta-commentary/Preambles (Expanded list)
-            # Matches patterns at start of string or after a newline
-            output = re.sub(r'^\s*(Here is|Sure,|Okay,|I will|Response:|Reply:|Output:|Answer:|My response:|Bot:).*?(\n|$)', '', output, flags=re.I | re.MULTILINE)
-
-            # 4. Remove Markdown code block artifacts
-            output = output.replace("```json", "").replace("```", "")
-
-            # 5. Fix formatting of mentions
-            output = re.sub(r'@\(([^)]+)\)', r'@\1', output)
-
-            # 6. Remove Emojis
-            emoji_pattern = re.compile(
-                "["
-                u"\U0001F600-\U0001F64F"  # emoticons
-                u"\U0001F300-\U0001F5FF"  # symbols & pictographs
-                u"\U0001F680-\U0001F6FF"  # transport & map symbols
-                u"\U0001F1E0-\U0001F1FF"  # flags (iOS)
-                u"\u2600-\u26FF\u2700-\u27BF"
-                "]+", flags=re.UNICODE)
-            output = emoji_pattern.sub("", output)
-            
-            # 7. Remove specific unwanted characters
-            output = output.replace("\uFE0F", "").replace("/", "").replace("\\", "")
-
-            # 8. Strict line-by-line filtering for system tags and context leakage
-            try:
-                lines = output.splitlines()
-                filtered = []
-                for line in lines:
-                    stripped = line.strip()
-                    if not stripped:
-                        continue
-                    
-                    # Remove enclosing quotes if the model wrapped the response
-                    if (stripped.startswith('"') and stripped.endswith('"')) or \
-                       (stripped.startswith("'") and stripped.endswith("'")):
-                        stripped = stripped[1:-1].strip()
-
-                    # Filter moderator references
-                    if re.search(r'\[MODERATOR\]|\bmoderator\b|\bmod\b', stripped, flags=re.I):
-                        continue
-                    
-                    # Filter system/bot tags (e.g. "System:", "User:", "Bot:")
-                    if re.search(r'^\s*(System|User|Assistant|Bot|AI)[:\s]', stripped, flags=re.I):
-                        continue
-                    
-                    # Filter hallucinations about commands/time (e.g., "I ran the command yesterday")
-                    if re.search(r'\bcommand\b', stripped, flags=re.I) and \
-                       re.search(r'\b(last night|yesterday|this morning|today)\b', stripped, flags=re.I):
-                        continue
-                    
-                    # Filter stray thought fragments that might have escaped tags
-                    if "thinking process" in stripped.lower() or "thought:" in stripped.lower():
-                        continue
-
-                    # Filter German internal error specifically
-                    if "interner fehler" in stripped.lower():
-                        continue
-
-                    # ✅ FIXED: Explicit filter for "No response generated" leak
-                    if "no response generated" in stripped.lower():
-                        continue
-
-                    filtered.append(stripped)
+            except Exception as e:
+                logger.warning("Primary API Failed: %s. Switching to BACKUP API.", e)
+                used_api = "backup"
                 
-                output = "\n".join(filtered).strip()
-                
-            except Exception as _e:
-                logger.warning("Judge logic filtering failed: %s", _e)
-            
-            if len(output) > 200:
-                output = output[:197] + "..."
+                # ================= BACKUP API CALL (Copilot) - ASYNC =================
+                try:
+                    # Map action to mode: 'analyze' -> 'smart', everything else -> 'chat'
+                    backup_mode = "smart" if action == "analyze" else "chat"
+                    
+                    if "YOUR_BACKUP_HOST_URL" in BACKUP_API_BASE:
+                        logger.error("Backup API URL not configured! Please set BACKUP_API_BASE.")
+                        raise ValueError("Backup API URL not configured")
+
+                    backup_url = f"{BACKUP_API_BASE.rstrip('/')}/{backup_mode}"
+                    logger.info("Calling BACKUP inference API: %s", backup_url)
+                    
+                    params = {"prompt": final_prompt}
+                    
+                    timeout = aiohttp.ClientTimeout(total=20)
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                        async with session.get(backup_url, params=params) as r:
+                            r.raise_for_status()
+                            ai_data = await r.json()
+                            
+                            # ✅ FIXED: Prevent leaking "no response generated" or raw JSON strings
+                            output = ai_data.get("response") or ai_data.get("message") or ai_data.get("content") or ""
+                            
+                            if not output or (isinstance(output, str) and "no response generated" in output.lower()):
+                                logger.warning("Backup API returned invalid content: %s", ai_data)
+                                output = "" 
+                                
+                except Exception as backup_e:
+                    logger.error("Backup API also failed: %s", backup_e)
+                    if attempt == loop_count - 1: # Only fail request on last attempt
+                        return jsonify({"error": "All inference APIs failed", "primary_error": str(e), "backup_error": str(backup_e)}), 500
 
             # ========================================================================
-            # NEW: NONSENSE CHECK (Stop empty, repetitive, or broken output)
-            # ========================================================================
             
-            is_nonsense = False
-            
-            # Check 1: Too short to be a valid chat message (unless specific slang)
-            valid_short_slang = ['lol', 'gg', 'rip', 'yo', 'f', 'w', 'l']
-            if len(output) < 2 and output.lower() not in valid_short_slang:
-                is_nonsense = True
-                
-            # Check 2: Repetitive characters (e.g., "hhhhhh", ".....")
-            if len(output) > 4 and len(set(output)) == 1:
-                is_nonsense = True
-                
-            # Check 3: Check for purely non-alphanumeric garbage (allowing common chat punctuation)
-            # If after removing common chat punctuation there's nothing left or just symbols
-            clean_text = re.sub(r'[!?.,]', '', output)
-            if not clean_text.strip():
-                 is_nonsense = True
+            output = str(output).strip()
 
-            if is_nonsense:
-                logger.warning("Caught nonsense output: '%s'. Suppressing.", output)
-                output = "" # Return empty string so frontend ignores it
-            
-            # ========================================================================
+            # Only apply strict judge logic for chat mode (simple messages)
+            if action == "chat":
+                # ========================================================================
+                # RIGOROUS JUDGE LOGIC (FIXED TO PREVENT LEAKS)
+                # ========================================================================
+                
+                # 1. AGGRESSIVE <think> REMOVAL
+                output = re.sub(r'<think>.*?</think>', '', output, flags=re.DOTALL | re.IGNORECASE)
+                if '<think>' in output.lower():
+                     output = re.sub(r'<think>.*', '', output, flags=re.DOTALL | re.IGNORECASE)
 
-            # ========================================================================
-            # CHECK AND STRIP @ FROM ACTIVE USERS (OTHER BOTS)
-            # ========================================================================
-            if active_usernames:
-                for active_bot in active_usernames:
-                    # active_bot format is like "@BotName"
-                    # We use regex to case-insensitively find the bot mention and remove the '@'
-                    if active_bot:
-                        # Escape the handle except the leading @ to avoid regex issues, 
-                        # though standard usernames are usually safe.
-                        # We search for the active_bot string (e.g. "@BotName")
-                        pattern = re.compile(re.escape(active_bot), re.IGNORECASE)
-                        # Replace it with just the name (e.g. "BotName")
-                        clean_name = active_bot.lstrip("@")
-                        output = pattern.sub(clean_name, output)
-            # ========================================================================
+                # 2. Remove standard AI refusals
+                output = re.sub(r"^(As an AI|I'm an AI|I am an AI|I cannot|Sorry, but|Interner Fehler).*?\s*", "", output, flags=re.I)
+
+                # 3. Remove Meta-commentary/Preambles
+                output = re.sub(r'^\s*(Here is|Sure,|Okay,|I will|Response:|Reply:|Output:|Answer:|My response:|Bot:).*?(\n|$)', '', output, flags=re.I | re.MULTILINE)
+
+                # 4. Remove Markdown
+                output = output.replace("```json", "").replace("```", "")
+
+                # 5. Fix formatting of mentions
+                output = re.sub(r'@\(([^)]+)\)', r'@\1', output)
+
+                # 6. Remove Emojis
+                emoji_pattern = re.compile(
+                    "["
+                    u"\U0001F600-\U0001F64F"
+                    u"\U0001F300-\U0001F5FF"
+                    u"\U0001F680-\U0001F6FF"
+                    u"\U0001F1E0-\U0001F1FF"
+                    u"\u2600-\u26FF\u2700-\u27BF"
+                    "]+", flags=re.UNICODE)
+                output = emoji_pattern.sub("", output)
+                
+                # 7. Remove unwanted chars
+                output = output.replace("\uFE0F", "").replace("/", "").replace("\\", "")
+
+                # 8. Strict line-by-line filtering
+                try:
+                    lines = output.splitlines()
+                    filtered = []
+                    for line in lines:
+                        stripped = line.strip()
+                        if not stripped:
+                            continue
+                        
+                        if (stripped.startswith('"') and stripped.endswith('"')) or \
+                           (stripped.startswith("'") and stripped.endswith("'")):
+                            stripped = stripped[1:-1].strip()
+
+                        if re.search(r'\[MODERATOR\]|\bmoderator\b|\bmod\b', stripped, flags=re.I):
+                            continue
+                        
+                        if re.search(r'^\s*(System|User|Assistant|Bot|AI)[:\s]', stripped, flags=re.I):
+                            continue
+                        
+                        if re.search(r'\bcommand\b', stripped, flags=re.I) and \
+                           re.search(r'\b(last night|yesterday|this morning|today)\b', stripped, flags=re.I):
+                            continue
+                        
+                        if "thinking process" in stripped.lower() or "thought:" in stripped.lower():
+                            continue
+
+                        if "interner fehler" in stripped.lower():
+                            continue
+
+                        if "no response generated" in stripped.lower():
+                            continue
+
+                        filtered.append(stripped)
+                    
+                    output = "\n".join(filtered).strip()
+                    
+                except Exception as _e:
+                    logger.warning("Judge logic filtering failed: %s", _e)
+                
+                if len(output) > 200:
+                    output = output[:197] + "..."
+
+                # ========================================================================
+                # NONSENSE CHECK
+                # ========================================================================
+                is_nonsense = False
+                valid_short_slang = ['lol', 'gg', 'rip', 'yo', 'f', 'w', 'l']
+                if len(output) < 2 and output.lower() not in valid_short_slang:
+                    is_nonsense = True
+                if len(output) > 4 and len(set(output)) == 1:
+                    is_nonsense = True
+                clean_text = re.sub(r'[!?.,]', '', output)
+                if not clean_text.strip():
+                     is_nonsense = True
+
+                if is_nonsense:
+                    logger.warning("Caught nonsense output: '%s'. Suppressing.", output)
+                    output = "" 
+
+                # ========================================================================
+                # NEW CHECK: DETECT ACTIVE BOTS AND REGENERATE
+                # ========================================================================
+                bot_found = False
+                if active_usernames and output:
+                    for active_bot in active_usernames:
+                        # active_bot is "@Username"
+                        # Check if output contains "Username" (case insensitive)
+                        check_name = active_bot.lstrip("@").lower()
+                        if check_name in output.lower():
+                            logger.warning("Judge DETECTED bot interaction with %s in message: '%s'. REGENERATING...", active_bot, output)
+                            
+                            # Add negative constraint to prompt for next attempt
+                            final_prompt += f"\nSYSTEM ALERT: You just tried to mention {active_bot}. THIS IS A BOT. DO NOT MENTION THEM. Generate a completely different message."
+                            
+                            bot_found = True
+                            output = "" # Clear output so we don't return it
+                            break # Break inner loop to trigger outer loop continue
+                
+                if bot_found:
+                    if attempt < loop_count - 1:
+                        continue # Retry the API call
+                    else:
+                        logger.error("Max retries reached. Bot insists on talking to other bots. returning empty.")
+                        output = "" # Fail safe
+                        break
+                else:
+                    # No bot found, output is clean (or empty from nonsense check), break the retry loop and return
+                    break
 
         return jsonify({"raw": {"response": output, "source": used_api}}), 200
 
