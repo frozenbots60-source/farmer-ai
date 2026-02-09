@@ -427,7 +427,7 @@ async def get_active_usernames():
     """
     try:
         # ✅ FIXED: Standard string URL, no markdown
-        active_url = "https://farmer-auth1-a6807b536c38.herokuapp.com/active_users"
+        active_url = "[https://farmer-auth1-a6807b536c38.herokuapp.com/active_users](https://farmer-auth1-a6807b536c38.herokuapp.com/active_users)"
         logger.info("Fetching active users: %s", active_url)
         
         timeout = aiohttp.ClientTimeout(total=5)
@@ -492,7 +492,7 @@ async def handle_country_request(country_code):
 
         encoded_user = quote(user)
         # ✅ FIXED: Standard string URL, no markdown, correctly formatted parameters
-        auth_url = f"https://farmer-auth1-a6807b536c38.herokuapp.com/check?user={encoded_user}"
+        auth_url = f"[https://farmer-auth1-a6807b536c38.herokuapp.com/check?user=](https://farmer-auth1-a6807b536c38.herokuapp.com/check?user=){encoded_user}"
         logger.info("Auth check: %s", auth_url)
 
         timeout = aiohttp.ClientTimeout(total=10)
@@ -624,7 +624,7 @@ async def handle_country_request(country_code):
         # ================= PRIMARY API CALL (Workers) - ASYNC =================
         try:
             logger.info("Calling PRIMARY inference API for %s with model %s", country_code, selected_model)
-            api_url = "https://ai-chat.apisimpacientes.workers.dev/chat"
+            api_url = "[https://ai-chat.apisimpacientes.workers.dev/chat](https://ai-chat.apisimpacientes.workers.dev/chat)"
             params = {
                 "model": selected_model,
                 "prompt": final_prompt
@@ -674,10 +674,16 @@ async def handle_country_request(country_code):
                     async with session.get(backup_url, params=params) as r:
                         r.raise_for_status()
                         ai_data = await r.json()
-                        # Backup API returns data in "response" field
-                        output = ai_data.get("response", "")
-                        if not output:
-                            output = str(ai_data) # Fallback if structure differs
+                        
+                        # ✅ FIXED: Prevent leaking "no response generated" or raw JSON strings
+                        # Prioritize finding the correct content field
+                        output = ai_data.get("response") or ai_data.get("message") or ai_data.get("content") or ""
+                        
+                        # If output matches specific failure keywords or is empty, set to empty string
+                        # DO NOT fallback to str(ai_data) which causes the leak
+                        if not output or (isinstance(output, str) and "no response generated" in output.lower()):
+                            logger.warning("Backup API returned invalid content: %s", ai_data)
+                            output = "" 
                             
             except Exception as backup_e:
                 logger.error("Backup API also failed: %s", backup_e)
@@ -685,7 +691,7 @@ async def handle_country_request(country_code):
 
         # ========================================================================
         
-        output = output.strip()
+        output = str(output).strip()
 
         # Only apply strict judge logic for chat mode (simple messages)
         # For analysis mode, we preserve the output structure (e.g. JSON)
@@ -761,6 +767,10 @@ async def handle_country_request(country_code):
 
                     # Filter German internal error specifically
                     if "interner fehler" in stripped.lower():
+                        continue
+
+                    # ✅ FIXED: Explicit filter for "No response generated" leak
+                    if "no response generated" in stripped.lower():
                         continue
 
                     filtered.append(stripped)
