@@ -37,8 +37,8 @@ ANALYSIS_TIER_1 = [
 ]
 
 CHAT_TIER_1 = [
-    "llama-3-70b",
-    "mistral-small-24b",
+    "glm-4.7",
+    "sonar",
     "mistral-small-3.1-24b",
     "command-r",
     "llama-3.3-70b-versatile"
