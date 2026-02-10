@@ -638,8 +638,11 @@ async def handle_country_request(country_code):
         used_api = "none"
         used_model = "none"
         
-        # Determine Model Tier
-        model_tier = ANALYSIS_TIER_1 if action == "analyze" else CHAT_TIER_1
+        # Determine Model Tier (Select Top 2 Deterministically)
+        if action == "analyze":
+            selected_models = ANALYSIS_TIER_1[:2]
+        else:
+            selected_models = CHAT_TIER_1[:2]
         
         # ========================================================================
         # RETRY LOOP: WRAP API CALLS AND CHECK FOR BOT MENTIONS (MAX 3 ATTEMPTS)
@@ -649,15 +652,9 @@ async def handle_country_request(country_code):
 
         for attempt in range(loop_count):
             
-            # --- ATTEMPT NEW API TIER LIST FIRST ---
+            # --- ATTEMPT NEW API TIER LIST FIRST (Top 2 Models Only) ---
             success_new_api = False
             
-            # Randomize model order slightly to distribute load, but keep tier logic
-            current_tier = model_tier.copy()
-            # We don't want to try ALL models in one attempt loop because that takes too long.
-            # We try 2 models per attempt.
-            selected_models = random.sample(current_tier, min(2, len(current_tier)))
-
             for model_name in selected_models:
                 try:
                     api_url = f"{NEW_API_BASE}?q={quote(final_prompt)}&model={model_name}"
