@@ -37,7 +37,7 @@ ANALYSIS_TIER_1 = [
 ]
 
 CHAT_TIER_1 = [
-    "glm-4.7",
+    "gemini-3-flash",
     "sonar",
     "mistral-small-3.1-24b",
     "command-r",
