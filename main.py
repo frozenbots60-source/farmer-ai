@@ -29,16 +29,16 @@ BACKUP_API_BASE = "https://copilot-ai-two.vercel.app"
 
 # Model Configurations
 ANALYSIS_TIER_1 = [
-    "sonar-reasoning",
-    "deepseek-r1-0528",
+    "gpt-5.2",
+    "claude-haiku-4.5",
     "deepseek-r1-distill-qwen-14b",
     "qwen-3-235b",
-    "gpt-5.2"
+    "sonar-reasoning"
 ]
 
 CHAT_TIER_1 = [
-    "gemini-2.5-flash",
     "gemini-3-flash",
+    "gemini-2.5-flash",
     "mistral-small-3.1-24b",
     "command-r",
     "llama-3.3-70b-versatile"
