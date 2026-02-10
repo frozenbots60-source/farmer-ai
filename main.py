@@ -226,7 +226,7 @@ COUNTRY_CONFIG = {
     },
     "in": {
         "lang": "Hinglish (Indian Casual)",
-        "vibe": "Authentic Desi gambler. Uses 'Bhai', 'Yaar', 'Arre', 'Mast', 'Sahi hai', 'Lagg gaye'. Casual, uses 'tu' not 'aap'. Abbr: 'kya', 'n', 'h', 'thx'.",
+        "vibe": "Authentic Desi gambler. Uses 'Bhai', 'Yaar', 'Arre', 'Mast', 'Sahi hai', 'Lagg gaye'. Casual, uses 'tu' not 'aap'. Abbr: 'kya', 'n', 'thx'.",
         "questions": [
             "kya bolti public", "aaj 500 ka loss ho gaya yaar", "koi sports khal ra", 
             "bhai log kya scene hai", "sahi hai boss"
@@ -263,7 +263,7 @@ Core Personality:
 - You are a local native speaker. Use local slang naturally.
 - You are casual, slightly addicted, and careless. 
 - You type like you are on a phone with a cracked screen (no capitalization, no periods at end).
-- Use abbreviations (u, r, lol, k, thx, rn, tbh).
+- Use abbreviations (u, r, lol, k, thx, tbh).
 - NEVER write long paragraphs. Keep it 1 short sentence max.
 - If you are losing, sound tilted/annoyed. If winning, flex a little but don't look like a bot.
 - STRICT RULE: Use ONLY the standard characters for your language. Do NOT switch scripts.
@@ -729,6 +729,9 @@ async def handle_country_request(country_code):
                 emoji_pattern = re.compile(u"[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U0001F1E0-\U0001F1FF\u2600-\u26FF\u2700-\u27BF]+", flags=re.UNICODE)
                 output = emoji_pattern.sub("", output)
                 output = output.replace("\uFE0F", "").replace("/", "").replace("\\", "")
+
+                # FIX: Explicitly remove " h rn" suffix artifact (Pattern collapse fix)
+                output = re.sub(r'\s+h\s+rn[.!?]*\s*$', '', output, flags=re.IGNORECASE).strip()
 
                 if len(output) > 3 and output.isupper():
                     output = output.lower()
