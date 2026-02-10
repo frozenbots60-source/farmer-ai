@@ -24,7 +24,7 @@ app = Flask(__name__)
 # New Primary API Base
 NEW_API_BASE = "http://104.168.62.69:8000/ai"
 
-# Backup API (Copilot)
+# Backup API (Copilot) - NOW PRIMARY FOR CHAT
 BACKUP_API_BASE = "https://copilot-ai-two.vercel.app" 
 
 # Model Configurations
@@ -638,11 +638,14 @@ async def handle_country_request(country_code):
         used_api = "none"
         used_model = "none"
         
-        # Determine Model Tier (Select Top 2 Deterministically)
-        if action == "analyze":
+        # Determine Models based on Action
+        # NEW LOGIC: Only use 'ANALYSIS_TIER_1' for 'analyze'. 
+        # For 'chat', we force the loop to skip the NEW_API completely.
+        should_use_new_api = (action == "analyze")
+        
+        selected_models = []
+        if should_use_new_api:
             selected_models = ANALYSIS_TIER_1[:2]
-        else:
-            selected_models = CHAT_TIER_1[:2]
         
         # ========================================================================
         # RETRY LOOP: WRAP API CALLS AND CHECK FOR BOT MENTIONS (MAX 3 ATTEMPTS)
@@ -652,39 +655,41 @@ async def handle_country_request(country_code):
 
         for attempt in range(loop_count):
             
-            # --- ATTEMPT NEW API TIER LIST FIRST (Top 2 Models Only) ---
+            # --- ATTEMPT NEW API TIER LIST FIRST (Only if Analysis) ---
             success_new_api = False
             
-            for model_name in selected_models:
-                try:
-                    api_url = f"{NEW_API_BASE}?q={quote(final_prompt)}&model={model_name}"
-                    logger.info("Calling NEW API: %s (Model: %s)", NEW_API_BASE, model_name)
-                    
-                    timeout = aiohttp.ClientTimeout(total=8) # Fast timeout for main API
-                    async with aiohttp.ClientSession(timeout=timeout) as session:
-                        async with session.get(api_url) as r:
-                            r.raise_for_status()
-                            ai_data = await r.json()
-                            
-                            # Check success flag from new API
-                            if ai_data.get("success") is True:
-                                raw_output = ai_data.get("response", "")
-                                if raw_output:
-                                    output = raw_output
-                                    used_api = "new-api"
-                                    used_model = model_name
-                                    success_new_api = True
-                                    break
-                except Exception as e:
-                    logger.warning("New API model %s failed: %s", model_name, e)
-                    continue # Try next model
+            if should_use_new_api:
+                for model_name in selected_models:
+                    try:
+                        api_url = f"{NEW_API_BASE}?q={quote(final_prompt)}&model={model_name}"
+                        logger.info("Calling NEW API: %s (Model: %s)", NEW_API_BASE, model_name)
+                        
+                        timeout = aiohttp.ClientTimeout(total=8) # Fast timeout for main API
+                        async with aiohttp.ClientSession(timeout=timeout) as session:
+                            async with session.get(api_url) as r:
+                                r.raise_for_status()
+                                ai_data = await r.json()
+                                
+                                # Check success flag from new API
+                                if ai_data.get("success") is True:
+                                    raw_output = ai_data.get("response", "")
+                                    if raw_output:
+                                        output = raw_output
+                                        used_api = "new-api"
+                                        used_model = model_name
+                                        success_new_api = True
+                                        break
+                    except Exception as e:
+                        logger.warning("New API model %s failed: %s", model_name, e)
+                        continue # Try next model
             
-            # --- FALLBACK TO COPILOT IF NEW API FAILED ---
+            # --- FALLBACK / PRIMARY FOR CHAT (Copilot) ---
+            # If New API failed OR if we are in CHAT mode (should_use_new_api is False)
             if not success_new_api:
                 try:
                     api_mode = "smart" if action == "analyze" else "chat"
                     api_url = f"{BACKUP_API_BASE.rstrip('/')}/{api_mode}"
-                    logger.info("Fallback to BACKUP API (Copilot): %s", api_url)
+                    logger.info("Using BACKUP API (Copilot): %s", api_url)
                     
                     params = {"prompt": final_prompt}
                     timeout = aiohttp.ClientTimeout(total=15)
