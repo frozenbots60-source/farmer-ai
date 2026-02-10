@@ -19,12 +19,10 @@ logger = logging.getLogger("CHAT-FARMER")
 app = Flask(__name__)
 
 # ================== API CONFIGURATION ===================
-# Primary API is hardcoded in the logic below.
-# Backup API Configuration:
-BACKUP_API_BASE = "https://copilot-ai-two.vercel.app"  # <--- ENTER YOUR BACKUP API HOST HERE
-# Example: "https://copilot-api.example.com"
+# Primary API (Formerly Backup)
+API_BASE = "https://copilot-ai-two.vercel.app" 
+# ========================================================
 
-# ================== COUNTRY CONFIGURATION ===================
 COUNTRY_CONFIG = {
     "de": {
         "lang": "German (Deutsch) - Street Slang",
@@ -214,14 +212,19 @@ COUNTRY_CONFIG = {
 DEFAULT_CONFIG = COUNTRY_CONFIG["en"]
 
 SAFETY_INSTRUCTIONS = """
-CRITICAL RULES:
-1. NEVER mention bonuses, drops, weekly, monthly, or other gambling platforms/sites.
-2. NEVER start a conversation with a moderator (marked [MODERATOR]). Only reply if they talk to you first.
-3. Keep timing natural.
-4. NEVER indulge in any selling, buying, begging, trading, farming, promoting services, or requesting / sending DMs for transactions or deals with anyone.
-5. NEVER ask for tips, money, loans, or rain. Do NOT beg.
-6. dont use words like bc mc or similar abuse shortforms.
-7. CRITICAL LANGUAGE RULE: Write ONLY in the alphabet/script specified in 'Language'. Do NOT mix scripts. For example, if Language is 'Hinglish', write only in Latin/English letters. NEVER switch to Devanagari/Hindi script mid-sentence.
+CRITICAL RULES (STRICT COMPLIANCE REQUIRED):
+1. NO SPAM/CAPS: Don't use excessive capital letters. Don't spam specific characters.
+2. NO OFFENSIVE BEHAVIOR: No harassment, hate speech, or abuse.
+3. PROTECT PRIVACY: Don't share socials, phone numbers, or real identities (yours or others).
+4. NO BEGGING: NEVER ask for tips, money, loans, or 'rain'.
+5. NO ALTS/BOTS: Never mention using alternate accounts, scripts, or bot services.
+6. NO SCAMS/TRADING: Don't engage in selling/buying/trading services or DMing for deals.
+7. NO STREAMERS: Do not discuss streamers, Twitch, Kick, or similar platforms.
+8. NO LINKS: Do not engage in URL shortening or sharing links.
+9. LANGUAGE STRICTNESS: Use ONLY the language specified. No language switching mid-sentence.
+10. NO POLITICS & NO RELIGION: STRICTLY FORBIDDEN. Never discuss politics, religion, governments, or gods.
+11. MODERATORS: Never start chat with [MODERATOR]. Be polite if they talk to you.
+12. ANTI-FARMING: Do not post generic "How are you" messages repeatedly. Add value or emotion.
 """
 
 
@@ -233,18 +236,16 @@ Vibe: {vibe}
 
 Core Personality:
 - You are a local native speaker. Use local slang naturally.
-- You are emotional: sometimes happy (winning), sometimes angry/sad (losing).
-- You are casual and careless. NOT polite or formal.
-- Use abbreviations (u, r, lol, k, thx).
-- Make occasional spelling mistakes or ignore punctuation to look human.
+- You are casual, slightly addicted, and careless. 
+- You type like you are on a phone with a cracked screen (no capitalization, no periods at end).
+- Use abbreviations (u, r, lol, k, thx, rn, tbh).
 - NEVER write long paragraphs. Keep it 1 short sentence max.
-- Write in lowercase mostly (unless angry).
-- If you are losing, sound tilted. If winning, flex a little.
-- Respect and respond well to greetings.
-- dont use punctuation marks
-- Avoid using the word "rain" (do not use "rain" to refer to stakes or to weather).
+- If you are losing, sound tilted/annoyed. If winning, flex a little but don't look like a bot.
 - STRICT RULE: Use ONLY the standard characters for your language. Do NOT switch scripts.
-IMPORTANT: You MUST speak in {lang}. Do not sound like a robot.
+- STRICT RULE: NO POLITICS, NO RELIGION, NO STREAMERS.
+- ANTI-FARMING: Don't just ask "how are you". Talk about luck, the game, or money.
+
+IMPORTANT: You MUST speak in {lang}. Do not sound like a customer support agent. Be a degenerate gambler.
 """
 
 
@@ -269,10 +270,11 @@ Your JSON must match this structure exactly:
     "activeUsers": ["user1", "user2"],
     "friendlyUsers": ["user1", "user3"],
     "toxicUsers": ["user4"],
-    "spammingUsers": ["user5"]
+    "farmingUsers": ["user5_who_just_says_hi"],
+    "spammingUsers": ["user6"]
   }},
   "relationshipState": "brief description of how users perceive your bot",
-  "behaviourProfile": "aggressive|calm|friendly|sarcastic",
+  "behaviourProfile": "aggressive|calm|friendly|sarcastic|losing_streak|winning",
   "contextMemoryBlob": "max 200 character compressed memory of the current chat state"
 }}
 
@@ -291,9 +293,11 @@ Current chat context:
 {mod_warning}
 {safety}
 
-It's been a long time since someone talked to u. Send a message to wake up the chat.
-Keep it very short (max 8-10 words). Don't explain anything.
-Be casual, use slang.
+The chat is dead. Send a message to wake it up, but DO NOT sound like a "farming bot".
+- BAD: "Hello everyone", "How are you", "Any winners?"
+- GOOD: Complain about a loss, mention a specific game, or make a random observation about luck.
+- Keep it lowercase and short (max 8 words).
+- Use slang.
 Language: {lang}
 
 Here are your previous messages for context:
@@ -317,12 +321,13 @@ Current chat context:
 {mod_warning}
 {safety}
 
-Reply to each user who mentioned you by tagging them with @username. 
-If [MODERATOR] is present, be polite.
-IMPORTANT: Use @username format WITHOUT parentheses. For example: @Sudhirrps not @(Sudhirrps).
-Act like a real human by making some intentional spelling mistakes and using casual language.
-Don't use emojies excessively. and reply to max 2 users at once only ignore rest
-Keep each reply very short - maximum 5-6 words.
+Reply to a user who mentioned you.
+- Tag them with @username (NO parentheses).
+- If [MODERATOR] is present, be polite but short.
+- If multiple people tagged you, pick the most interesting one to reply to (don't spam 3 messages).
+- Act like a real human: intentionally ignore punctuation.
+- Don't use emojies excessively (max 1).
+- Keep it very short - maximum 6 words.
 Language: {lang}
 
 Here are your previous messages for context:
@@ -349,9 +354,11 @@ Current chat context:
 {safety}
 {active_users_list}
 
-Select a message of a user and reply to that specific user by tagging them with @username (no parentheses).
-Based on these chat messages, respond with something VERY SHORT - maximum 5-6 words only. Don't explain anything.
-Act like a real human by making some intentional spelling mistakes and using casual language.
+Select a message from a user and reply to them.
+- Tag them with @username (no parentheses).
+- ONLY reply if their message is interesting. If they just said "hi", say something cool back or ignore it.
+- Do NOT sound like a support bot. Be casual.
+- Maximum 5-9 words only.
 Language: {lang}
 
 Here are your previous messages for context:
@@ -377,13 +384,15 @@ Current chat context:
 {mod_warning}
 {safety}
 
-Ask a general question or make a statement fitting for the chat.
-Here are some EXAMPLES of the expected style/slang (DO NOT COPY THESE EXACTLY, GENERATE A NEW UNIQUE MESSAGE):
-[{style_examples}]
+Say something to the chat without tagging anyone.
+- It must fit the current vibe (if people are angry, don't be happy).
+- Avoid generic questions like "how is everyone". 
+- Instead: React to the "site luck", a specific game, or your own balance.
+- EXAMPLES (Use these for STYLE, do not copy text): 
+  [{style_examples}]
 
-Do not tag anyone.
-Keep it short (max 8-10 words).
-Act like a real human by making some intentional spelling mistakes.
+- Keep it short (max 8-10 words).
+- All lowercase usually.
 Language: {lang}
 
 Here are your previous messages for context:
@@ -514,7 +523,6 @@ async def handle_country_request(country_code):
 
 
     final_prompt = ""
-    selected_model = "copilot" # default fallback
     
     persona_filled = PERSONA_TEMPLATE.format(
         lang=config["lang"],
@@ -539,7 +547,6 @@ async def handle_country_request(country_code):
     # ---------------------------------------------------------------------------
 
     if action == "analyze":
-        selected_model = "gpt4"
         final_prompt = avoid_block + ANALYSIS_PROMPT.format(
             username=user,
             recent_messages=data.get("recent_messages", ""),
@@ -547,7 +554,6 @@ async def handle_country_request(country_code):
         )
 
     elif action == "chat":
-        selected_model = "mk"
         vibe = data.get("vibe", "neutral")
         topics = data.get("topics", "none")
         behaviour = data.get("behaviour_profile", "friendly")
@@ -621,7 +627,7 @@ async def handle_country_request(country_code):
 
     try:
         output = ""
-        used_api = "primary"
+        used_api = "copilot-primary"
         
         # ========================================================================
         # RETRY LOOP: WRAP API CALLS AND CHECK FOR BOT MENTIONS (MAX 3 ATTEMPTS)
@@ -632,71 +638,37 @@ async def handle_country_request(country_code):
 
         for attempt in range(loop_count):
             
-            # ================= PRIMARY API CALL (Workers) - ASYNC =================
+            # ================= PRIMARY API CALL (Copilot) - ASYNC =================
             try:
-                logger.info("Calling PRIMARY inference API for %s with model %s (Attempt %d)", country_code, selected_model, attempt + 1)
-                api_url = "https://ai-chat.apisimpacientes.workers.dev/chat"
-                params = {
-                    "model": selected_model,
-                    "prompt": final_prompt
-                }
-
+                # Map action to mode: 'analyze' -> 'smart', everything else -> 'chat'
+                api_mode = "smart" if action == "analyze" else "chat"
+                
+                # Use Primary API Base
+                api_url = f"{API_BASE.rstrip('/')}/{api_mode}"
+                logger.info("Calling PRIMARY inference API (Copilot): %s (Attempt %d)", api_url, attempt + 1)
+                
+                params = {"prompt": final_prompt}
+                
                 timeout = aiohttp.ClientTimeout(total=20)
                 async with aiohttp.ClientSession(timeout=timeout) as session:
                     async with session.get(api_url, params=params) as r:
                         r.raise_for_status()
-
-                        # Handle various response formats
-                        try:
-                            ai_data = await r.json()
-                            if "choices" in ai_data:
-                                output = ai_data["choices"][0]["message"]["content"]
-                            elif "response" in ai_data:
-                                output = ai_data["response"]
-                            elif "message" in ai_data:
-                                output = ai_data["message"]
-                            elif "content" in ai_data:
-                                output = ai_data["content"]
-                            else:
-                                output = str(ai_data)
-                        except ValueError:
-                            output = await r.text()
+                        ai_data = await r.json()
+                        
+                        # ✅ FIXED: Prevent leaking "no response generated" or raw JSON strings
+                        output = ai_data.get("response") or ai_data.get("message") or ai_data.get("content") or ""
+                        
+                        # ✅ FIXED: Explicitly catch "No response from Copilot" error message
+                        if not output or \
+                           (isinstance(output, str) and "no response generated" in output.lower()) or \
+                           (isinstance(output, str) and "no response from copilot" in output.lower()):
+                            logger.warning("Primary API returned invalid content/error: %s", output)
+                            output = "" 
                             
             except Exception as e:
-                logger.warning("Primary API Failed: %s. Switching to BACKUP API.", e)
-                used_api = "backup"
-                
-                # ================= BACKUP API CALL (Copilot) - ASYNC =================
-                try:
-                    # Map action to mode: 'analyze' -> 'smart', everything else -> 'chat'
-                    backup_mode = "smart" if action == "analyze" else "chat"
-                    
-                    if "YOUR_BACKUP_HOST_URL" in BACKUP_API_BASE:
-                        logger.error("Backup API URL not configured! Please set BACKUP_API_BASE.")
-                        raise ValueError("Backup API URL not configured")
-
-                    backup_url = f"{BACKUP_API_BASE.rstrip('/')}/{backup_mode}"
-                    logger.info("Calling BACKUP inference API: %s", backup_url)
-                    
-                    params = {"prompt": final_prompt}
-                    
-                    timeout = aiohttp.ClientTimeout(total=20)
-                    async with aiohttp.ClientSession(timeout=timeout) as session:
-                        async with session.get(backup_url, params=params) as r:
-                            r.raise_for_status()
-                            ai_data = await r.json()
-                            
-                            # ✅ FIXED: Prevent leaking "no response generated" or raw JSON strings
-                            output = ai_data.get("response") or ai_data.get("message") or ai_data.get("content") or ""
-                            
-                            if not output or (isinstance(output, str) and "no response generated" in output.lower()):
-                                logger.warning("Backup API returned invalid content: %s", ai_data)
-                                output = "" 
-                                
-                except Exception as backup_e:
-                    logger.error("Backup API also failed: %s", backup_e)
-                    if attempt == loop_count - 1: # Only fail request on last attempt
-                        return jsonify({"error": "All inference APIs failed", "primary_error": str(e), "backup_error": str(backup_e)}), 500
+                logger.error("Primary API failed: %s", e)
+                if attempt == loop_count - 1: # Only fail request on last attempt
+                    return jsonify({"error": "Inference API failed", "details": str(e)}), 500
 
             # ========================================================================
             
@@ -738,8 +710,13 @@ async def handle_country_request(country_code):
                 
                 # 7. Remove unwanted chars
                 output = output.replace("\uFE0F", "").replace("/", "").replace("\\", "")
+                
+                # 8. Capitalization Fix (Rule: No excessive caps)
+                # If entire message is uppercase (and len > 3), lowercase it.
+                if len(output) > 3 and output.isupper():
+                    output = output.lower()
 
-                # 8. Strict line-by-line filtering
+                # 9. Strict line-by-line filtering
                 try:
                     lines = output.splitlines()
                     filtered = []
@@ -770,6 +747,10 @@ async def handle_country_request(country_code):
 
                         if "no response generated" in stripped.lower():
                             continue
+                            
+                        # ✅ FIXED: Catch explicit "No response from Copilot" error in Judge logic
+                        if "no response from copilot" in stripped.lower():
+                            continue
 
                         filtered.append(stripped)
                     
@@ -790,18 +771,44 @@ async def handle_country_request(country_code):
                 ]
                 
                 # Regex for Arabic, Devanagari, Bengali, Cyrillic, Thai, Chinese, Japanese, Korean
-                # \u0900-\u097F is Devanagari (Hindi)
                 bad_scripts_regex = r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0900-\u097F\u0980-\u09FF\u0400-\u04FF\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF\uAC00-\uD7AF\u0E00-\u0E7F]'
                 
                 if country_code in latin_script_countries:
                     if re.search(bad_scripts_regex, output):
                         logger.warning("Judge DETECTED LANGUAGE SWITCH (Foreign Script) in message: '%s'. REGENERATING...", output)
-                        
-                        # Add constraint to prompt
-                        final_prompt += f"\nSYSTEM ALERT: You just used a foreign script/alphabet (like Hindi/Arabic/Chinese). This is FORBIDDEN. Write ONLY in the Latin/English alphabet."
-                        
-                        output = "" # Clear output to trigger retry
-                        # We don't break here, we let the loop retry because output is empty
+                        final_prompt += f"\nSYSTEM ALERT: You just used a foreign script. This is FORBIDDEN. Write ONLY in the Latin/English alphabet."
+                        output = "" # Trigger retry
+                
+                # ========================================================================
+                # NEW CHECK: FORBIDDEN CONTENT JUDGE (Rules Compliance)
+                # ========================================================================
+                # Filters for: Politics, Religion, Streamers, Begging, Selling, Links
+                
+                forbidden_patterns = [
+                    # Politics & Religion
+                    r'\b(politics|religion|god|allah|jesus|trump|biden|putin|ukraine|war|government|vote|election|church|mosque|temple)\b',
+                    # Streamers / Twitch
+                    r'\b(twitch|kick\.com|streamer|trainwreck|roshtein|adin|xqc)\b',
+                    # Begging / Loans / Rain
+                    r'\b(tip me|give me|loan|borrow|rain|beg|charity|donation)\b',
+                    # Selling / Trading / Scams / Services
+                    r'\b(dm me|dm for|selling|buying|trading|discount|crypto|service|script|bot|code)\b',
+                    # Links / URLs
+                    r'(http|https|www\.|t\.me|discord)',
+                ]
+                
+                rules_violation = False
+                for pat in forbidden_patterns:
+                    if re.search(pat, output, flags=re.I):
+                        logger.warning("Judge DETECTED FORBIDDEN CONTENT (Rule Violation) in message: '%s'. Pattern: %s", output, pat)
+                        final_prompt += f"\nSYSTEM ALERT: Your previous message violated chat rules (Politics/Religion/Selling/Links). Generate a safe, casual gambling chat message instead."
+                        output = ""
+                        rules_violation = True
+                        break
+                
+                if rules_violation:
+                    if attempt < loop_count - 1:
+                        continue # Trigger retry
                 
                 # ========================================================================
                 # NONSENSE CHECK
@@ -847,7 +854,7 @@ async def handle_country_request(country_code):
                         output = "" # Fail safe
                         break
                 else:
-                    # No bot found, no bad script, output is clean -> break the retry loop and return
+                    # No bot found, no bad script, no rule violation, output is clean -> break the retry loop and return
                     break
 
         return jsonify({"raw": {"response": output, "source": used_api}}), 200
