@@ -221,6 +221,7 @@ CRITICAL RULES:
 4. NEVER indulge in any selling, buying, begging, trading, farming, promoting services, or requesting / sending DMs for transactions or deals with anyone.
 5. NEVER ask for tips, money, loans, or rain. Do NOT beg.
 6. dont use words like bc mc or similar abuse shortforms.
+7. CRITICAL LANGUAGE RULE: Write ONLY in the alphabet/script specified in 'Language'. Do NOT mix scripts. For example, if Language is 'Hinglish', write only in Latin/English letters. NEVER switch to Devanagari/Hindi script mid-sentence.
 """
 
 
@@ -242,6 +243,7 @@ Core Personality:
 - Respect and respond well to greetings.
 - dont use punctuation marks
 - Avoid using the word "rain" (do not use "rain" to refer to stakes or to weather).
+- STRICT RULE: Use ONLY the standard characters for your language. Do NOT switch scripts.
 IMPORTANT: You MUST speak in {lang}. Do not sound like a robot.
 """
 
@@ -780,6 +782,28 @@ async def handle_country_request(country_code):
                     output = output[:197] + "..."
 
                 # ========================================================================
+                # NEW CHECK: STRICT SCRIPT CHECK (Anti-Language Switch)
+                # ========================================================================
+                # This ensures countries like IN, PK, PH, ID, EN, US etc don't use Devanagari, Arabic, etc.
+                latin_script_countries = [
+                    "in", "pk", "ph", "id", "vn", "tr", "de", "us", "uk", "en", "pt", "es", "fi", "ng", "no", "pl"
+                ]
+                
+                # Regex for Arabic, Devanagari, Bengali, Cyrillic, Thai, Chinese, Japanese, Korean
+                # \u0900-\u097F is Devanagari (Hindi)
+                bad_scripts_regex = r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0900-\u097F\u0980-\u09FF\u0400-\u04FF\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF\uAC00-\uD7AF\u0E00-\u0E7F]'
+                
+                if country_code in latin_script_countries:
+                    if re.search(bad_scripts_regex, output):
+                        logger.warning("Judge DETECTED LANGUAGE SWITCH (Foreign Script) in message: '%s'. REGENERATING...", output)
+                        
+                        # Add constraint to prompt
+                        final_prompt += f"\nSYSTEM ALERT: You just used a foreign script/alphabet (like Hindi/Arabic/Chinese). This is FORBIDDEN. Write ONLY in the Latin/English alphabet."
+                        
+                        output = "" # Clear output to trigger retry
+                        # We don't break here, we let the loop retry because output is empty
+                
+                # ========================================================================
                 # NONSENSE CHECK
                 # ========================================================================
                 is_nonsense = False
@@ -815,15 +839,15 @@ async def handle_country_request(country_code):
                             output = "" # Clear output so we don't return it
                             break # Break inner loop to trigger outer loop continue
                 
-                if bot_found:
+                if bot_found or output == "":
                     if attempt < loop_count - 1:
                         continue # Retry the API call
                     else:
-                        logger.error("Max retries reached. Bot insists on talking to other bots. returning empty.")
+                        logger.error("Max retries reached. Returning empty.")
                         output = "" # Fail safe
                         break
                 else:
-                    # No bot found, output is clean (or empty from nonsense check), break the retry loop and return
+                    # No bot found, no bad script, output is clean -> break the retry loop and return
                     break
 
         return jsonify({"raw": {"response": output, "source": used_api}}), 200
