@@ -32,8 +32,8 @@ ANALYSIS_TIER_1 = [
 ]
 
 CHAT_TIER_1 = [
+    "gpt-4.1,
     "gpt-5-mini",
-    "gpt-4.1",
     "gpt-4o",
     "claude-haiku-4.5"
 ]
