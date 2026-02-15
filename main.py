@@ -22,7 +22,7 @@ app = Flask(__name__)
 
 # ================== API CONFIGURATION ===================
 # Primary API Base (Standard OpenAI-compatible endpoint)
-NEW_API_BASE = "http://104.168.62.69:8000/v1/chat/completions"
+NEW_API_BASE = "http://104.168.62.69:8317/v1/chat/completions"
 
 # Model Configurations
 ANALYSIS_TIER_1 = [
