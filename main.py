@@ -21,27 +21,21 @@ logger = logging.getLogger("CHAT-FARMER")
 app = Flask(__name__)
 
 # ================== API CONFIGURATION ===================
-# New Primary API Base
-NEW_API_BASE = "http://104.168.62.69:8000/ai"
+# Local VPS LLM-Mux API
+VPS_API_BASE = "http://104.168.62.69:8317/v1/chat/completions"
 
-# Backup API (Copilot) - NOW PRIMARY FOR CHAT
-BACKUP_API_BASE = "https://copilot-ai-two.vercel.app" 
-
-# Model Configurations
+# Model Configurations using your verified Copilot models
 ANALYSIS_TIER_1 = [
-    "gpt-5.2",
-    "claude-haiku-4.5",
-    "deepseek-r1-distill-qwen-14b",
-    "qwen-3-235b",
-    "sonar-reasoning"
+    "gpt-4.1",
+    "gpt-4o",
+    "claude-haiku-4.5"
 ]
 
 CHAT_TIER_1 = [
-    "gemini-3-flash",
-    "sonar",
-    "mistral-small-3.1-24b",
-    "command-r",
-    "llama-3.3-70b-versatile"
+    "gpt-5-mini",
+    "gpt-4.1",
+    "gpt-4o",
+    "claude-haiku-4.5"
 ]
 
 # Global History to prevent swarm repetition (Last 20 messages across ALL users)
@@ -457,7 +451,7 @@ def add_cors_headers(response):
 # ----------------- New helper: fetch active users list and return usernames -----------------
 async def get_active_usernames():
     try:
-        active_url = "https://farmer-auth1-a6807b536c38.herokuapp.com/active_users"
+        active_url = "[https://farmer-auth1-a6807b536c38.herokuapp.com/active_users](https://farmer-auth1-a6807b536c38.herokuapp.com/active_users)"
         timeout = aiohttp.ClientTimeout(total=5)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(active_url) as res:
@@ -518,7 +512,7 @@ async def handle_country_request(country_code):
             user = "@" + user
 
         encoded_user = quote(user)
-        auth_url = f"https://farmer-auth1-a6807b536c38.herokuapp.com/check?user={encoded_user}"
+        auth_url = f"[https://farmer-auth1-a6807b536c38.herokuapp.com/check?user=](https://farmer-auth1-a6807b536c38.herokuapp.com/check?user=){encoded_user}"
         
         timeout = aiohttp.ClientTimeout(total=10)
         async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -639,13 +633,10 @@ async def handle_country_request(country_code):
         used_model = "none"
         
         # Determine Models based on Action
-        # NEW LOGIC: Only use 'ANALYSIS_TIER_1' for 'analyze'. 
-        # For 'chat', we force the loop to skip the NEW_API completely.
-        should_use_new_api = (action == "analyze")
-        
-        selected_models = []
-        if should_use_new_api:
-            selected_models = ANALYSIS_TIER_1[:2]
+        if action == "analyze":
+            selected_models = ANALYSIS_TIER_1
+        else:
+            selected_models = CHAT_TIER_1
         
         # ========================================================================
         # RETRY LOOP: WRAP API CALLS AND CHECK FOR BOT MENTIONS (MAX 3 ATTEMPTS)
@@ -655,59 +646,44 @@ async def handle_country_request(country_code):
 
         for attempt in range(loop_count):
             
-            # --- ATTEMPT NEW API TIER LIST FIRST (Only if Analysis) ---
-            success_new_api = False
+            api_success = False
             
-            if should_use_new_api:
-                for model_name in selected_models:
-                    try:
-                        api_url = f"{NEW_API_BASE}?q={quote(final_prompt)}&model={model_name}"
-                        logger.info("Calling NEW API: %s (Model: %s)", NEW_API_BASE, model_name)
-                        
-                        timeout = aiohttp.ClientTimeout(total=8) # Fast timeout for main API
-                        async with aiohttp.ClientSession(timeout=timeout) as session:
-                            async with session.get(api_url) as r:
-                                r.raise_for_status()
-                                ai_data = await r.json()
-                                
-                                # Check success flag from new API
-                                if ai_data.get("success") is True:
-                                    raw_output = ai_data.get("response", "")
-                                    if raw_output:
-                                        output = raw_output
-                                        used_api = "new-api"
-                                        used_model = model_name
-                                        success_new_api = True
-                                        break
-                    except Exception as e:
-                        logger.warning("New API model %s failed: %s", model_name, e)
-                        continue # Try next model
-            
-            # --- FALLBACK / PRIMARY FOR CHAT (Copilot) ---
-            # If New API failed OR if we are in CHAT mode (should_use_new_api is False)
-            if not success_new_api:
+            # Iterate through available models for fallback
+            for model_name in selected_models:
                 try:
-                    api_mode = "smart" if action == "analyze" else "chat"
-                    api_url = f"{BACKUP_API_BASE.rstrip('/')}/{api_mode}"
-                    logger.info("Using BACKUP API (Copilot): %s", api_url)
+                    logger.info("Calling VPS API: %s (Model: %s)", VPS_API_BASE, model_name)
                     
-                    params = {"prompt": final_prompt}
+                    # Prepare OpenAI-compatible JSON payload
+                    payload_data = {
+                        "model": model_name,
+                        "messages": [
+                            {"role": "user", "content": final_prompt}
+                        ]
+                    }
+                    
                     timeout = aiohttp.ClientTimeout(total=15)
                     async with aiohttp.ClientSession(timeout=timeout) as session:
-                        async with session.get(api_url, params=params) as r:
+                        async with session.post(VPS_API_BASE, json=payload_data) as r:
                             r.raise_for_status()
                             ai_data = await r.json()
-                            output = ai_data.get("response") or ai_data.get("message") or ai_data.get("content") or ""
                             
-                            if output and "no response" not in str(output).lower():
-                                used_api = "backup-copilot"
-                                used_model = "copilot"
-                            else:
-                                output = ""
+                            # Parse OpenAI format response
+                            if "choices" in ai_data and len(ai_data["choices"]) > 0:
+                                raw_output = ai_data["choices"][0]["message"]["content"]
+                                if raw_output:
+                                    output = raw_output
+                                    used_api = "vps-llm-mux"
+                                    used_model = model_name
+                                    api_success = True
+                                    break
                 except Exception as e:
-                    logger.error("Backup API failed: %s", e)
-                    if attempt == loop_count - 1:
-                        return jsonify({"error": "All Inference APIs failed"}), 500
+                    logger.warning("VPS API model %s failed: %s", model_name, e)
+                    continue # Try next model
+            
+            if not api_success:
+                logger.error("All models in tier failed for this attempt.")
+                if attempt == loop_count - 1:
+                    return jsonify({"error": "All Inference APIs failed"}), 500
 
             # ========================================================================
             
