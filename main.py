@@ -26,17 +26,17 @@ NEW_API_BASE = "http://104.168.62.69:8000/v1/chat/completions"
 
 # Model Configurations
 ANALYSIS_TIER_1 = [
+    "gpt-4.1",
     "gpt-4o",
-    "claude-3-5-sonnet",
-    "deepseek-r1",
-    "qwen-2.5-72b-instruct"
+    "claude-haiku-4.5"
 ]
 
+
 CHAT_TIER_1 = [
-    "gemini-2.0-flash",
-    "llama-3.3-70b-versatile",
-    "mistral-large-latest",
-    "command-r-plus"
+    "gpt-5-mini",
+    "gpt-4.1",
+    "gpt-4o",
+    "claude-haiku-4.5"
 ]
 
 # Global History to prevent swarm repetition (Last 20 messages across ALL users)
