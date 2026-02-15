@@ -21,27 +21,22 @@ logger = logging.getLogger("CHAT-FARMER")
 app = Flask(__name__)
 
 # ================== API CONFIGURATION ===================
-# New Primary API Base
-NEW_API_BASE = "http://104.168.62.69:8000/ai"
-
-# Backup API (Copilot) - NOW PRIMARY FOR CHAT
-BACKUP_API_BASE = "https://copilot-ai-two.vercel.app" 
+# Primary API Base (Standard OpenAI-compatible endpoint)
+NEW_API_BASE = "http://104.168.62.69:8000/v1/chat/completions"
 
 # Model Configurations
 ANALYSIS_TIER_1 = [
-    "gpt-5.2",
-    "claude-haiku-4.5",
-    "deepseek-r1-distill-qwen-14b",
-    "qwen-3-235b",
-    "sonar-reasoning"
+    "gpt-4o",
+    "claude-3-5-sonnet",
+    "deepseek-r1",
+    "qwen-2.5-72b-instruct"
 ]
 
 CHAT_TIER_1 = [
-    "gemini-3-flash",
-    "sonar",
-    "mistral-small-3.1-24b",
-    "command-r",
-    "llama-3.3-70b-versatile"
+    "gemini-2.0-flash",
+    "llama-3.3-70b-versatile",
+    "mistral-large-latest",
+    "command-r-plus"
 ]
 
 # Global History to prevent swarm repetition (Last 20 messages across ALL users)
@@ -274,20 +269,23 @@ IMPORTANT: You MUST speak in {lang}. Do not sound like a customer support agent.
 """
 
 
-ANALYSIS_PROMPT = """
-You are analyzing a casino chat to understand the social dynamics.
+ANALYSIS_SYSTEM_PROMPT = """
+You are an expert social analyst for casino chat rooms. 
+Your job is to read chat logs and output a strict JSON summary of the social dynamics.
+Do NOT output conversational text. ONLY output valid JSON.
+"""
+
+ANALYSIS_USER_PROMPT = """
+Analyze this chat context.
 Your username is {username}.
 
-Based on these recent chat messages:
+Recent chat messages:
 {recent_messages}
 
-And your bot's recent messages:
+Bot's recent messages:
 {bot_messages}
 
-IMPORTANT: ONLY RETURN A SINGLE VALID JSON OBJECT. DO NOT INCLUDE ANY MARKDOWN, CODE-FENCES (```), OR ANY EXPLANATORY TEXT.
-START IMMEDIATELY WITH THE JSON OBJECT (the very first character MUST be '{{').
-
-Your JSON must match this structure exactly:
+Return a single JSON object with this EXACT structure:
 {{
   "vibe": "dead|slow|active|chaotic|tilt|happy|argument|flex|bonus-wait",
   "topics": "brief summary of main topics being discussed",
@@ -302,13 +300,9 @@ Your JSON must match this structure exactly:
   "behaviourProfile": "aggressive|calm|friendly|sarcastic|losing_streak|winning",
   "contextMemoryBlob": "max 200 character compressed memory of the current chat state"
 }}
-
-Focus on accuracy and brevity.
-ONLY return valid JSON.
 """
 
 INACTIVITY_PROMPT = """
-{persona}
 Current chat context:
 - Vibe: {vibe}
 - Topics: {topics}
@@ -335,7 +329,6 @@ Your response:
 """
 
 MENTION_PROMPT = """
-{persona}
 Current chat context:
 - Vibe: {vibe}
 - Topics: {topics}
@@ -368,7 +361,6 @@ Your response (format: @user message):
 """
 
 GENERAL_TAG_PROMPT = """
-{persona}
 Current chat context:
 - Vibe: {vibe}
 - Topics: {topics}
@@ -399,7 +391,6 @@ Your response (start with @username):
 """
 
 GENERAL_NO_TAG_PROMPT = """
-{persona}
 Current chat context:
 - Vibe: {vibe}
 - Topics: {topics}
@@ -534,15 +525,18 @@ async def handle_country_request(country_code):
         return jsonify({"error": "Auth API failure", "details": str(e)}), 500
 
 
-    final_prompt = ""
+    # ================== PROMPT CONSTRUCTION ==================
+    system_instruction = ""
+    user_prompt = ""
     
-    persona_filled = PERSONA_TEMPLATE.format(
+    # 1. Base Persona
+    persona_text = PERSONA_TEMPLATE.format(
         lang=config["lang"],
         vibe=config["vibe"],
         username=user
     )
 
-    # ----------------- fetch active users and build avoid block -----------------
+    # 2. Fetch active users and build avoid block
     active_usernames = await get_active_usernames()
     avoid_block = ""
     if active_usernames:
@@ -553,11 +547,8 @@ async def handle_country_request(country_code):
             f"You are STRICTLY FORBIDDEN from tagging, replying to, mentioning, or talking to these users.\n"
             f"Do NOT start a conversation with them.\n\n"
         )
-    # ---------------------------------------------------------------------------
 
-    # ----------------- Global History Injection (Similarity Check API) -------------
-    # We inject the global history into the prompt so the model (API) acts as the judge
-    # and ensures the new output is unique compared to the swarm's recent activity.
+    # 3. Global History Injection
     global_context_msgs = " | ".join(list(GLOBAL_BOT_HISTORY))
     global_uniqueness_instruction = ""
     if global_context_msgs:
@@ -566,16 +557,21 @@ async def handle_country_request(country_code):
             f"\n[{global_context_msgs}]\n"
             f"Ensure your response is distinct from the text above."
         )
-    # ---------------------------------------------------------------------------
 
+    # 4. Construct Prompts based on Action
     if action == "analyze":
-        final_prompt = avoid_block + ANALYSIS_PROMPT.format(
+        system_instruction = ANALYSIS_SYSTEM_PROMPT
+        user_prompt = avoid_block + ANALYSIS_USER_PROMPT.format(
             username=user,
             recent_messages=data.get("recent_messages", ""),
             bot_messages=data.get("bot_messages", "")
         )
-
+        # Low temp for analysis
+        ai_temperature = 0.4
+        
     elif action == "chat":
+        system_instruction = persona_text
+        
         vibe = data.get("vibe", "neutral")
         topics = data.get("topics", "none")
         behaviour = data.get("behaviour_profile", "friendly")
@@ -586,20 +582,19 @@ async def handle_country_request(country_code):
         bot_history = data.get("bot_history", "")
         last_bot_msgs = data.get("last_bot_messages_raw", "")
         recent_msgs = data.get("formatted_messages", "")
-
         mode = data.get("mode", "general_no_tag")
 
         base_prompt = ""
         if mode == "inactivity":
             base_prompt = INACTIVITY_PROMPT.format(
-                persona=persona_filled, vibe=vibe, topics=topics, behaviour_profile=behaviour,
+                vibe=vibe, topics=topics, behaviour_profile=behaviour,
                 memory=memory, emotional_state=e_state, emotional_word=e_word,
                 mod_warning=mod_warning, safety=SAFETY_INSTRUCTIONS,
                 bot_history=bot_history, last_bot_messages=last_bot_msgs, lang=config["lang"]
             )
         elif mode == "mention":
             base_prompt = MENTION_PROMPT.format(
-                persona=persona_filled, vibe=vibe, topics=topics, behaviour_profile=behaviour,
+                vibe=vibe, topics=topics, behaviour_profile=behaviour,
                 memory=memory, emotional_state=e_state, emotional_word=e_word,
                 specific_context=data.get("specific_context", ""),
                 mod_warning=mod_warning, safety=SAFETY_INSTRUCTIONS,
@@ -608,7 +603,7 @@ async def handle_country_request(country_code):
             )
         elif mode == "general_tag":
             base_prompt = GENERAL_TAG_PROMPT.format(
-                persona=persona_filled, vibe=vibe, topics=topics, behaviour_profile=behaviour,
+                vibe=vibe, topics=topics, behaviour_profile=behaviour,
                 memory=memory, emotional_state=e_state, emotional_word=e_word,
                 mod_warning=mod_warning, safety=SAFETY_INSTRUCTIONS,
                 active_users_list=avoid_block,
@@ -619,7 +614,7 @@ async def handle_country_request(country_code):
             style_samples = random.sample(config["questions"], min(3, len(config["questions"])))
             style_examples_str = " | ".join(style_samples)
             base_prompt = GENERAL_NO_TAG_PROMPT.format(
-                persona=persona_filled, vibe=vibe, topics=topics, behaviour_profile=behaviour,
+                vibe=vibe, topics=topics, behaviour_profile=behaviour,
                 memory=memory, emotional_state=e_state, emotional_word=e_word,
                 mod_warning=mod_warning, safety=SAFETY_INSTRUCTIONS,
                 style_examples=style_examples_str,
@@ -627,7 +622,9 @@ async def handle_country_request(country_code):
                 last_bot_messages=last_bot_msgs, lang=config["lang"]
             )
         
-        final_prompt = avoid_block + base_prompt + global_uniqueness_instruction
+        user_prompt = avoid_block + base_prompt + global_uniqueness_instruction
+        # High temp for creativity
+        ai_temperature = 1.3
 
     else:
         return jsonify({"error": "Invalid action"}), 400
@@ -639,76 +636,67 @@ async def handle_country_request(country_code):
         used_model = "none"
         
         # Determine Models based on Action
-        # NEW LOGIC: Only use 'ANALYSIS_TIER_1' for 'analyze'. 
-        # For 'chat', we force the loop to skip the NEW_API completely.
-        should_use_new_api = (action == "analyze")
-        
+        # NOTE: Both actions now use the NEW_API_BASE, but we select models accordingly.
         selected_models = []
-        if should_use_new_api:
+        if action == "analyze":
             selected_models = ANALYSIS_TIER_1[:2]
+        else:
+            selected_models = CHAT_TIER_1[:2]
         
         # ========================================================================
         # RETRY LOOP: WRAP API CALLS AND CHECK FOR BOT MENTIONS (MAX 3 ATTEMPTS)
         # ========================================================================
         max_retries = 3
         loop_count = 1 if action == "analyze" else max_retries
+        
+        # For appending error/judge feedback in retries
+        judge_feedback = ""
 
         for attempt in range(loop_count):
+            current_user_prompt = user_prompt + judge_feedback
             
-            # --- ATTEMPT NEW API TIER LIST FIRST (Only if Analysis) ---
-            success_new_api = False
-            
-            if should_use_new_api:
-                for model_name in selected_models:
-                    try:
-                        api_url = f"{NEW_API_BASE}?q={quote(final_prompt)}&model={model_name}"
-                        logger.info("Calling NEW API: %s (Model: %s)", NEW_API_BASE, model_name)
-                        
-                        timeout = aiohttp.ClientTimeout(total=8) # Fast timeout for main API
-                        async with aiohttp.ClientSession(timeout=timeout) as session:
-                            async with session.get(api_url) as r:
-                                r.raise_for_status()
-                                ai_data = await r.json()
-                                
-                                # Check success flag from new API
-                                if ai_data.get("success") is True:
-                                    raw_output = ai_data.get("response", "")
-                                    if raw_output:
-                                        output = raw_output
-                                        used_api = "new-api"
-                                        used_model = model_name
-                                        success_new_api = True
-                                        break
-                    except Exception as e:
-                        logger.warning("New API model %s failed: %s", model_name, e)
-                        continue # Try next model
-            
-            # --- FALLBACK / PRIMARY FOR CHAT (Copilot) ---
-            # If New API failed OR if we are in CHAT mode (should_use_new_api is False)
-            if not success_new_api:
+            # Loop through selected models for the primary API
+            for model_name in selected_models:
                 try:
-                    api_mode = "smart" if action == "analyze" else "chat"
-                    api_url = f"{BACKUP_API_BASE.rstrip('/')}/{api_mode}"
-                    logger.info("Using BACKUP API (Copilot): %s", api_url)
+                    # Construct Payload for Chat Completion
+                    json_payload = {
+                        "model": model_name,
+                        "messages": [
+                            {"role": "system", "content": system_instruction},
+                            {"role": "user", "content": current_user_prompt}
+                        ],
+                        "temperature": ai_temperature
+                    }
                     
-                    params = {"prompt": final_prompt}
+                    logger.info("Calling API: %s (Model: %s, Temp: %s)", NEW_API_BASE, model_name, ai_temperature)
+                    
                     timeout = aiohttp.ClientTimeout(total=15)
                     async with aiohttp.ClientSession(timeout=timeout) as session:
-                        async with session.get(api_url, params=params) as r:
-                            r.raise_for_status()
-                            ai_data = await r.json()
-                            output = ai_data.get("response") or ai_data.get("message") or ai_data.get("content") or ""
-                            
-                            if output and "no response" not in str(output).lower():
-                                used_api = "backup-copilot"
-                                used_model = "copilot"
+                        async with session.post(NEW_API_BASE, json=json_payload) as r:
+                            if r.status == 200:
+                                ai_data = await r.json()
+                                # Handle OpenAI Standard format
+                                choices = ai_data.get("choices", [])
+                                if choices and len(choices) > 0:
+                                    raw_output = choices[0].get("message", {}).get("content", "")
+                                    if raw_output:
+                                        output = raw_output
+                                        used_api = "primary-api"
+                                        used_model = model_name
+                                        break
                             else:
-                                output = ""
-                except Exception as e:
-                    logger.error("Backup API failed: %s", e)
-                    if attempt == loop_count - 1:
-                        return jsonify({"error": "All Inference APIs failed"}), 500
+                                logger.warning("API Status %s", r.status)
 
+                except Exception as e:
+                    logger.warning("API model %s failed: %s", model_name, e)
+                    continue 
+
+            # If we got a response, validate it; otherwise, the loop ends (or we fail)
+            if not output:
+                if attempt == loop_count - 1:
+                    return jsonify({"error": "All Inference APIs failed"}), 500
+                continue
+            
             # ========================================================================
             
             output = str(output).strip()
@@ -747,7 +735,6 @@ async def handle_country_request(country_code):
                         if re.search(r'\bcommand\b', stripped, flags=re.I) and re.search(r'\b(last night|yesterday|today)\b', stripped, flags=re.I): continue
                         if "thinking process" in stripped.lower() or "thought:" in stripped.lower(): continue
                         if "interner fehler" in stripped.lower(): continue
-                        if "no response generated" in stripped.lower() or "no response from copilot" in stripped.lower(): continue
                         filtered.append(stripped)
                     output = "\n".join(filtered).strip()
                 except Exception:
@@ -762,7 +749,7 @@ async def handle_country_request(country_code):
                 if country_code in latin_script_countries:
                     if re.search(bad_scripts_regex, output):
                         logger.warning("Judge DETECTED LANGUAGE SWITCH. REGENERATING...")
-                        final_prompt += f"\nSYSTEM ALERT: You just used a foreign script. Write ONLY in the Latin/English alphabet."
+                        judge_feedback = f"\nSYSTEM ALERT: You just used a foreign script. Write ONLY in the Latin/English alphabet."
                         output = "" 
 
                 # 4. Forbidden Content Check
@@ -777,7 +764,7 @@ async def handle_country_request(country_code):
                 for pat in forbidden_patterns:
                     if re.search(pat, output, flags=re.I):
                         logger.warning("Judge DETECTED FORBIDDEN CONTENT. REGENERATING...")
-                        final_prompt += f"\nSYSTEM ALERT: Your previous message violated chat rules (Politics/Religion/Selling/Links). Generate a safe, casual gambling chat message instead."
+                        judge_feedback = f"\nSYSTEM ALERT: Your previous message violated chat rules (Politics/Religion/Selling/Links). Generate a safe, casual gambling chat message instead."
                         output = ""
                         rules_violation = True
                         break
@@ -799,7 +786,7 @@ async def handle_country_request(country_code):
                         check_name = active_bot.lstrip("@").lower()
                         if check_name in output.lower():
                             logger.warning("Judge DETECTED bot interaction with %s. REGENERATING...", active_bot)
-                            final_prompt += f"\nSYSTEM ALERT: You just tried to mention {active_bot}. THIS IS A BOT. DO NOT MENTION THEM. Generate a completely different message."
+                            judge_feedback = f"\nSYSTEM ALERT: You just tried to mention {active_bot}. THIS IS A BOT. DO NOT MENTION THEM. Generate a completely different message."
                             bot_found = True
                             output = ""
                             break
@@ -814,7 +801,7 @@ async def handle_country_request(country_code):
                         ratio = difflib.SequenceMatcher(None, output.lower(), old_msg.lower()).ratio()
                         if ratio > 0.8: # 80% similarity threshold
                             logger.warning("Judge DETECTED SIMILARITY (Ratio: %.2f) to old message: '%s'. REGENERATING...", ratio, old_msg)
-                            final_prompt += f"\nSYSTEM ALERT: You just said '{output}', which is too similar to a recent message. Say something completely different."
+                            judge_feedback = f"\nSYSTEM ALERT: You just said '{output}', which is too similar to a recent message. Say something completely different."
                             is_duplicate = True
                             output = ""
                             break
