@@ -718,6 +718,11 @@ async def handle_country_request(country_code):
                 output = emoji_pattern.sub("", output)
                 output = output.replace("\uFE0F", "").replace("/", "").replace("\\", "")
 
+                # ----------------------------------------------------
+                # NEW: Strip common punctuation to look more human/raw
+                # ----------------------------------------------------
+                output = re.sub(r'[.,!?;:]', '', output)
+
                 if len(output) > 3 and output.isupper():
                     output = output.lower()
 
