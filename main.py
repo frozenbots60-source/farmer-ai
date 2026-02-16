@@ -6,6 +6,8 @@ import re
 import asyncio
 import aiohttp
 import difflib
+import time
+import threading
 from flask import Flask, request, jsonify
 from urllib.parse import urlparse, quote
 from collections import deque
@@ -31,7 +33,6 @@ ANALYSIS_TIER_1 = [
     "claude-haiku-4.5"
 ]
 
-
 CHAT_TIER_1 = [
     "gpt-5-mini",
     "gpt-4.1",
@@ -41,6 +42,18 @@ CHAT_TIER_1 = [
 
 # Global History to prevent swarm repetition (Last 20 messages across ALL users)
 GLOBAL_BOT_HISTORY = deque(maxlen=20)
+
+# ================== CACHING & RATE LIMITING ===================
+# Analysis Cache (10 minutes)
+ANALYSIS_CACHE = {}
+ANALYSIS_IN_PROGRESS = {}
+CACHE_TTL_SECONDS = 600
+CACHE_LOCK = threading.Lock()
+
+# Concurrency Control to prevent 429s (Max simultaneous API calls)
+MAX_CONCURRENT_API_CALLS = 3
+CURRENT_API_CALLS = 0
+API_CALL_LOCK = threading.Lock()
 # ========================================================
 
 COUNTRY_CONFIG = {
@@ -247,7 +260,6 @@ CRITICAL RULES (STRICT COMPLIANCE REQUIRED):
 12. ANTI-FARMING: Do not post generic "How are you" messages repeatedly. Add value or emotion.
 """
 
-
 PERSONA_TEMPLATE = """
 You are a real human user in a casino chat. You are NOT an AI.
 Username: {{username}}
@@ -267,7 +279,6 @@ Core Personality:
 
 IMPORTANT: You MUST speak in {lang}. Do not sound like a customer support agent. Be a degenerate gambler.
 """
-
 
 ANALYSIS_SYSTEM_PROMPT = """
 You are an expert social analyst for casino chat rooms. 
@@ -435,7 +446,6 @@ def is_allowed_origin(origin):
     except:
         return False
 
-
 @app.after_request
 def add_cors_headers(response):
     origin = request.headers.get("Origin")
@@ -480,6 +490,7 @@ async def get_active_usernames():
 
 @app.route("/<country_code>", methods=["POST", "GET"])
 async def handle_country_request(country_code):
+    global CURRENT_API_CALLS
     logger.info("Incoming %s %s for Country: %s", request.method, request.path, country_code)
 
     if request.method == "GET":
@@ -502,7 +513,6 @@ async def handle_country_request(country_code):
     if not user:
         return jsonify({"error": "Missing user"}), 400
 
-
     # ✅ AUTH CHECK
     try:
         if not user.startswith("@"):
@@ -524,141 +534,155 @@ async def handle_country_request(country_code):
         logger.exception("Auth API failure")
         return jsonify({"error": "Auth API failure", "details": str(e)}), 500
 
+    # ================== STAMPEDE PROTECTION & CACHE CHECK ==================
+    if action == "analyze":
+        wait_time = 0
+        while wait_time < 20: # Wait up to 10 seconds (20 iterations of 0.5s)
+            with CACHE_LOCK:
+                cached_data = ANALYSIS_CACHE.get(country_code)
+                if cached_data and (time.time() - cached_data['timestamp'] < CACHE_TTL_SECONDS):
+                    logger.info("Served ANALYSIS for %s from CACHE (Age: %.1fs)", country_code, time.time() - cached_data['timestamp'])
+                    return jsonify({"raw": cached_data['data'], "cached": True}), 200
+                
+                # If no cache and no one else is currently fetching it, claim the lock
+                if not ANALYSIS_IN_PROGRESS.get(country_code, False):
+                    ANALYSIS_IN_PROGRESS[country_code] = True
+                    break
+            
+            # If someone else is fetching, wait and check again
+            await asyncio.sleep(0.5)
+            wait_time += 1
+            
+            # Failsafe: if we waited 10 seconds and it's still stuck, take over
+            if wait_time >= 20:
+                with CACHE_LOCK:
+                    ANALYSIS_IN_PROGRESS[country_code] = True
+                break
 
     # ================== PROMPT CONSTRUCTION ==================
-    system_instruction = ""
-    user_prompt = ""
-    
-    # 1. Base Persona
-    persona_text = PERSONA_TEMPLATE.format(
-        lang=config["lang"],
-        vibe=config["vibe"],
-        username=user
-    )
-
-    # 2. Fetch active users and build avoid block
-    active_usernames = await get_active_usernames()
-    avoid_block = ""
-    if active_usernames:
-        banned_users_str = ", ".join(active_usernames)
-        avoid_block = (
-            f"\nCRITICAL SYSTEM INSTRUCTION:\n"
-            f"The following users are also BOTS/AI: [{banned_users_str}].\n"
-            f"You are STRICTLY FORBIDDEN from tagging, replying to, mentioning, or talking to these users.\n"
-            f"Do NOT start a conversation with them.\n\n"
-        )
-
-    # 3. Global History Injection
-    global_context_msgs = " | ".join(list(GLOBAL_BOT_HISTORY))
-    global_uniqueness_instruction = ""
-    if global_context_msgs:
-        global_uniqueness_instruction = (
-            f"\n\nGLOBAL SWARM HISTORY (DO NOT REPEAT OR SOUND LIKE THESE):"
-            f"\n[{global_context_msgs}]\n"
-            f"Ensure your response is distinct from the text above."
-        )
-
-    # 4. Construct Prompts based on Action
-    if action == "analyze":
-        system_instruction = ANALYSIS_SYSTEM_PROMPT
-        user_prompt = avoid_block + ANALYSIS_USER_PROMPT.format(
-            username=user,
-            recent_messages=data.get("recent_messages", ""),
-            bot_messages=data.get("bot_messages", "")
-        )
-        # Low temp for analysis
-        ai_temperature = 0.4
-        
-    elif action == "chat":
-        system_instruction = persona_text
-        
-        vibe = data.get("vibe", "neutral")
-        topics = data.get("topics", "none")
-        behaviour = data.get("behaviour_profile", "friendly")
-        memory = data.get("memory", "none")
-        e_state = data.get("emotional_state", "neutral")
-        e_word = data.get("emotional_word", "")
-        mod_warning = data.get("mod_warning", "")
-        bot_history = data.get("bot_history", "")
-        last_bot_msgs = data.get("last_bot_messages_raw", "")
-        recent_msgs = data.get("formatted_messages", "")
-        mode = data.get("mode", "general_no_tag")
-
-        base_prompt = ""
-        if mode == "inactivity":
-            base_prompt = INACTIVITY_PROMPT.format(
-                vibe=vibe, topics=topics, behaviour_profile=behaviour,
-                memory=memory, emotional_state=e_state, emotional_word=e_word,
-                mod_warning=mod_warning, safety=SAFETY_INSTRUCTIONS,
-                bot_history=bot_history, last_bot_messages=last_bot_msgs, lang=config["lang"]
-            )
-        elif mode == "mention":
-            base_prompt = MENTION_PROMPT.format(
-                vibe=vibe, topics=topics, behaviour_profile=behaviour,
-                memory=memory, emotional_state=e_state, emotional_word=e_word,
-                specific_context=data.get("specific_context", ""),
-                mod_warning=mod_warning, safety=SAFETY_INSTRUCTIONS,
-                bot_history=bot_history, recent_messages=recent_msgs,
-                last_bot_messages=last_bot_msgs, lang=config["lang"]
-            )
-        elif mode == "general_tag":
-            base_prompt = GENERAL_TAG_PROMPT.format(
-                vibe=vibe, topics=topics, behaviour_profile=behaviour,
-                memory=memory, emotional_state=e_state, emotional_word=e_word,
-                mod_warning=mod_warning, safety=SAFETY_INSTRUCTIONS,
-                active_users_list=avoid_block,
-                bot_history=bot_history, recent_messages=recent_msgs,
-                last_bot_messages=last_bot_msgs, lang=config["lang"]
-            )
-        else:
-            style_samples = random.sample(config["questions"], min(3, len(config["questions"])))
-            style_examples_str = " | ".join(style_samples)
-            base_prompt = GENERAL_NO_TAG_PROMPT.format(
-                vibe=vibe, topics=topics, behaviour_profile=behaviour,
-                memory=memory, emotional_state=e_state, emotional_word=e_word,
-                mod_warning=mod_warning, safety=SAFETY_INSTRUCTIONS,
-                style_examples=style_examples_str,
-                bot_history=bot_history, recent_messages=recent_msgs,
-                last_bot_messages=last_bot_msgs, lang=config["lang"]
-            )
-        
-        user_prompt = avoid_block + base_prompt + global_uniqueness_instruction
-        # High temp for creativity
-        ai_temperature = 1.3
-
-    else:
-        return jsonify({"error": "Invalid action"}), 400
-
-
     try:
+        system_instruction = ""
+        user_prompt = ""
+        
+        # 1. Base Persona
+        persona_text = PERSONA_TEMPLATE.format(
+            lang=config["lang"],
+            vibe=config["vibe"],
+            username=user
+        )
+
+        # 2. Fetch active users and build avoid block
+        active_usernames = await get_active_usernames()
+        avoid_block = ""
+        if active_usernames:
+            banned_users_str = ", ".join(active_usernames)
+            avoid_block = (
+                f"\nCRITICAL SYSTEM INSTRUCTION:\n"
+                f"The following users are also BOTS/AI: [{banned_users_str}].\n"
+                f"You are STRICTLY FORBIDDEN from tagging, replying to, mentioning, or talking to these users.\n"
+                f"Do NOT start a conversation with them.\n\n"
+            )
+
+        # 3. Global History Injection
+        global_context_msgs = " | ".join(list(GLOBAL_BOT_HISTORY))
+        global_uniqueness_instruction = ""
+        if global_context_msgs:
+            global_uniqueness_instruction = (
+                f"\n\nGLOBAL SWARM HISTORY (DO NOT REPEAT OR SOUND LIKE THESE):"
+                f"\n[{global_context_msgs}]\n"
+                f"Ensure your response is distinct from the text above."
+            )
+
+        # 4. Construct Prompts based on Action
+        if action == "analyze":
+            system_instruction = ANALYSIS_SYSTEM_PROMPT
+            user_prompt = avoid_block + ANALYSIS_USER_PROMPT.format(
+                username=user,
+                recent_messages=data.get("recent_messages", ""),
+                bot_messages=data.get("bot_messages", "")
+            )
+            # Low temp for analysis
+            ai_temperature = 0.4
+            
+        elif action == "chat":
+            system_instruction = persona_text
+            
+            vibe = data.get("vibe", "neutral")
+            topics = data.get("topics", "none")
+            behaviour = data.get("behaviour_profile", "friendly")
+            memory = data.get("memory", "none")
+            e_state = data.get("emotional_state", "neutral")
+            e_word = data.get("emotional_word", "")
+            mod_warning = data.get("mod_warning", "")
+            bot_history = data.get("bot_history", "")
+            last_bot_msgs = data.get("last_bot_messages_raw", "")
+            recent_msgs = data.get("formatted_messages", "")
+            mode = data.get("mode", "general_no_tag")
+
+            base_prompt = ""
+            if mode == "inactivity":
+                base_prompt = INACTIVITY_PROMPT.format(
+                    vibe=vibe, topics=topics, behaviour_profile=behaviour,
+                    memory=memory, emotional_state=e_state, emotional_word=e_word,
+                    mod_warning=mod_warning, safety=SAFETY_INSTRUCTIONS,
+                    bot_history=bot_history, last_bot_messages=last_bot_msgs, lang=config["lang"]
+                )
+            elif mode == "mention":
+                base_prompt = MENTION_PROMPT.format(
+                    vibe=vibe, topics=topics, behaviour_profile=behaviour,
+                    memory=memory, emotional_state=e_state, emotional_word=e_word,
+                    specific_context=data.get("specific_context", ""),
+                    mod_warning=mod_warning, safety=SAFETY_INSTRUCTIONS,
+                    bot_history=bot_history, recent_messages=recent_msgs,
+                    last_bot_messages=last_bot_msgs, lang=config["lang"]
+                )
+            elif mode == "general_tag":
+                base_prompt = GENERAL_TAG_PROMPT.format(
+                    vibe=vibe, topics=topics, behaviour_profile=behaviour,
+                    memory=memory, emotional_state=e_state, emotional_word=e_word,
+                    mod_warning=mod_warning, safety=SAFETY_INSTRUCTIONS,
+                    active_users_list=avoid_block,
+                    bot_history=bot_history, recent_messages=recent_msgs,
+                    last_bot_messages=last_bot_msgs, lang=config["lang"]
+                )
+            else:
+                style_samples = random.sample(config["questions"], min(3, len(config["questions"])))
+                style_examples_str = " | ".join(style_samples)
+                base_prompt = GENERAL_NO_TAG_PROMPT.format(
+                    vibe=vibe, topics=topics, behaviour_profile=behaviour,
+                    memory=memory, emotional_state=e_state, emotional_word=e_word,
+                    mod_warning=mod_warning, safety=SAFETY_INSTRUCTIONS,
+                    style_examples=style_examples_str,
+                    bot_history=bot_history, recent_messages=recent_msgs,
+                    last_bot_messages=last_bot_msgs, lang=config["lang"]
+                )
+            
+            user_prompt = avoid_block + base_prompt + global_uniqueness_instruction
+            # High temp for creativity
+            ai_temperature = 1.3
+
+        else:
+            return jsonify({"error": "Invalid action"}), 400
+
+
         output = ""
         used_api = "none"
         used_model = "none"
         
-        # Determine Models based on Action
-        # NOTE: Both actions now use the NEW_API_BASE, but we select models accordingly.
-        selected_models = []
-        if action == "analyze":
-            selected_models = ANALYSIS_TIER_1[:2]
-        else:
-            selected_models = CHAT_TIER_1[:2]
+        selected_models = ANALYSIS_TIER_1[:2] if action == "analyze" else CHAT_TIER_1[:2]
         
         # ========================================================================
         # RETRY LOOP: WRAP API CALLS AND CHECK FOR BOT MENTIONS (MAX 3 ATTEMPTS)
         # ========================================================================
         max_retries = 3
         loop_count = 1 if action == "analyze" else max_retries
-        
-        # For appending error/judge feedback in retries
         judge_feedback = ""
 
         for attempt in range(loop_count):
             current_user_prompt = user_prompt + judge_feedback
             
-            # Loop through selected models for the primary API
             for model_name in selected_models:
                 try:
-                    # Construct Payload for Chat Completion
                     json_payload = {
                         "model": model_name,
                         "messages": [
@@ -668,30 +692,45 @@ async def handle_country_request(country_code):
                         "temperature": ai_temperature
                     }
                     
-                    logger.info("Calling API: %s (Model: %s, Temp: %s)", NEW_API_BASE, model_name, ai_temperature)
-                    
-                    timeout = aiohttp.ClientTimeout(total=15)
-                    async with aiohttp.ClientSession(timeout=timeout) as session:
-                        async with session.post(NEW_API_BASE, json=json_payload) as r:
-                            if r.status == 200:
-                                ai_data = await r.json()
-                                # Handle OpenAI Standard format
-                                choices = ai_data.get("choices", [])
-                                if choices and len(choices) > 0:
-                                    raw_output = choices[0].get("message", {}).get("content", "")
-                                    if raw_output:
-                                        output = raw_output
-                                        used_api = "primary-api"
-                                        used_model = model_name
-                                        break
-                            else:
-                                logger.warning("API Status %s", r.status)
+                    # 🚥 GLOBALLY RATE-LIMIT API CALLS TO PREVENT 429 HAMMERING 🚥
+                    while True:
+                        with API_CALL_LOCK:
+                            if CURRENT_API_CALLS < MAX_CONCURRENT_API_CALLS:
+                                CURRENT_API_CALLS += 1
+                                break
+                        await asyncio.sleep(0.3) # Wait briefly for a slot to open up
+
+                    try:
+                        logger.info("Calling API: %s (Model: %s, Temp: %s) [Active Calls: %d]", NEW_API_BASE, model_name, ai_temperature, CURRENT_API_CALLS)
+                        timeout = aiohttp.ClientTimeout(total=15)
+                        async with aiohttp.ClientSession(timeout=timeout) as session:
+                            async with session.post(NEW_API_BASE, json=json_payload) as r:
+                                if r.status == 200:
+                                    ai_data = await r.json()
+                                    choices = ai_data.get("choices", [])
+                                    if choices and len(choices) > 0:
+                                        raw_output = choices[0].get("message", {}).get("content", "")
+                                        if raw_output:
+                                            output = raw_output
+                                            used_api = "primary-api"
+                                            used_model = model_name
+                                            break
+                                elif r.status == 429:
+                                    logger.warning("API Status 429. Backing off to prevent ban...")
+                                    await asyncio.sleep(2.0) # Penalty cooldown
+                                else:
+                                    logger.warning("API Status %s", r.status)
+                                    await asyncio.sleep(1.0)
+                    finally:
+                        # Always release the concurrency lock
+                        with API_CALL_LOCK:
+                            CURRENT_API_CALLS -= 1
 
                 except Exception as e:
                     logger.warning("API model %s failed: %s", model_name, e)
+                    await asyncio.sleep(1.0)
                     continue 
 
-            # If we got a response, validate it; otherwise, the loop ends (or we fail)
             if not output:
                 if attempt == loop_count - 1:
                     return jsonify({"error": "All Inference APIs failed"}), 500
@@ -718,9 +757,6 @@ async def handle_country_request(country_code):
                 output = emoji_pattern.sub("", output)
                 output = output.replace("\uFE0F", "").replace("/", "").replace("\\", "")
 
-                # ----------------------------------------------------
-                # NEW: Strip common punctuation to look more human/raw
-                # ----------------------------------------------------
                 output = re.sub(r'[.,!?;:]', '', output)
 
                 if len(output) > 3 and output.isupper():
@@ -773,7 +809,10 @@ async def handle_country_request(country_code):
                         output = ""
                         rules_violation = True
                         break
-                if rules_violation and attempt < loop_count - 1: continue
+                
+                if rules_violation and attempt < loop_count - 1:
+                    await asyncio.sleep(1.0)
+                    continue
 
                 # 5. Nonsense Check
                 is_nonsense = False
@@ -795,40 +834,53 @@ async def handle_country_request(country_code):
                             bot_found = True
                             output = ""
                             break
-                if bot_found and attempt < loop_count - 1: continue
+                if bot_found and attempt < loop_count - 1:
+                    await asyncio.sleep(1.0)
+                    continue
 
-                # 7. SIMILARITY CHECK (The "Judge API Logic" implemented via History Context + Fuzzy Match)
-                # Ensure the new message isn't too similar to the Global History
+                # 7. SIMILARITY CHECK 
                 is_duplicate = False
                 if output:
                     for old_msg in list(GLOBAL_BOT_HISTORY):
-                        # Use difflib for similarity ratio
                         ratio = difflib.SequenceMatcher(None, output.lower(), old_msg.lower()).ratio()
-                        if ratio > 0.8: # 80% similarity threshold
+                        if ratio > 0.8:
                             logger.warning("Judge DETECTED SIMILARITY (Ratio: %.2f) to old message: '%s'. REGENERATING...", ratio, old_msg)
                             judge_feedback = f"\nSYSTEM ALERT: You just said '{output}', which is too similar to a recent message. Say something completely different."
                             is_duplicate = True
                             output = ""
                             break
-                if is_duplicate and attempt < loop_count - 1: continue
+                if is_duplicate and attempt < loop_count - 1:
+                    await asyncio.sleep(1.0)
+                    continue
 
-                # If we have a clean output, break the retry loop
                 if output:
-                    # Success - Add to global history
                     GLOBAL_BOT_HISTORY.append(output)
                     break
 
+        # Populate the cache if this was an analysis fetch
+        if action == "analyze" and output:
+            with CACHE_LOCK:
+                ANALYSIS_CACHE[country_code] = {
+                    "timestamp": time.time(),
+                    "data": {"response": output, "source": used_api, "model": used_model}
+                }
+                
         return jsonify({"raw": {"response": output, "source": used_api, "model": used_model}}), 200
 
     except Exception as e:
         logger.exception("Inference API failure")
         return jsonify({"error": "Inference API failure", "details": str(e)}), 500
 
+    finally:
+        # ALWAYS release the "stampede lock" when the fetch finishes (success or crash)
+        if action == "analyze":
+            with CACHE_LOCK:
+                if country_code in ANALYSIS_IN_PROGRESS:
+                    del ANALYSIS_IN_PROGRESS[country_code]
 
 @app.route("/", methods=["GET"])
 def home():
     return "Server Active. Use country codes like /us, /in, /pk, /de for API access."
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
