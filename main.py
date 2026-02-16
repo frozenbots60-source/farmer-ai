@@ -28,14 +28,14 @@ NEW_API_BASE = "http://104.168.62.69:8317/v1/chat/completions"
 
 # Model Configurations
 ANALYSIS_TIER_1 = [
-    "gpt-4.1",
     "gemini-3-flash",
+    "gpt-4.1",
     "claude-haiku-4.5"
 ]
 
 CHAT_TIER_1 = [
-    "gpt-5-mini",
     "gemini-3-flash",
+    "gpt-5-mini",
     "gpt-4o",
     "claude-haiku-4.5"
 ]
