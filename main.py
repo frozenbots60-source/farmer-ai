@@ -26,6 +26,9 @@ app = Flask(__name__)
 # Primary API Base (Standard OpenAI-compatible endpoint)
 NEW_API_BASE = "http://104.168.62.69:8317/v1/chat/completions"
 
+# Backup API Base (PicoApps LLM API)
+BACKUP_API_BASE = "https://backend.buildpicoapps.com/aero/run/llm-api?pk=v1-Z0FBQUFBQm5IZkJDMlNyYUVUTjIyZVN3UWFNX3BFTU85SWpCM2NUMUk3T2dxejhLSzBhNWNMMXNzZlp3c09BSTR6YW1Sc1BmdGNTVk1GY0liT1RoWDZZX1lNZlZ0Z1dqd3c9PQ=="
+
 # Model Configurations
 ANALYSIS_TIER_1 = [
     "gpt-oss-120b-medium",
@@ -659,7 +662,7 @@ async def handle_country_request(country_code):
             
             user_prompt = avoid_block + base_prompt + global_uniqueness_instruction
             # High temp for creativity
-            ai_temperature = 1.3
+            ai_temperature = 0.7
 
         else:
             return jsonify({"error": "Invalid action"}), 400
@@ -681,6 +684,7 @@ async def handle_country_request(country_code):
         for attempt in range(loop_count):
             current_user_prompt = user_prompt + judge_feedback
             
+            # --- PRIMARY API ATTEMPT ---
             for model_name in selected_models:
                 try:
                     json_payload = {
@@ -731,6 +735,45 @@ async def handle_country_request(country_code):
                     await asyncio.sleep(1.0)
                     continue 
 
+            # --- BACKUP API ATTEMPT (If primary models failed) ---
+            if not output:
+                try:
+                    logger.info("Primary API failed. Falling back to BACKUP API...")
+                    # Combine instructions for single-prompt API format
+                    backup_prompt = f"{system_instruction}\n\n{current_user_prompt}"
+                    json_payload_backup = {"prompt": backup_prompt}
+
+                    # Wait for a concurrency slot
+                    while True:
+                        with API_CALL_LOCK:
+                            if CURRENT_API_CALLS < MAX_CONCURRENT_API_CALLS:
+                                CURRENT_API_CALLS += 1
+                                break
+                        await asyncio.sleep(0.3)
+
+                    try:
+                        timeout = aiohttp.ClientTimeout(total=15)
+                        async with aiohttp.ClientSession(timeout=timeout) as session:
+                            async with session.post(BACKUP_API_BASE, json=json_payload_backup) as r:
+                                if r.status == 200:
+                                    ai_data = await r.json()
+                                    if ai_data.get("status") == "success":
+                                        raw_output = ai_data.get("text", "")
+                                        if raw_output:
+                                            output = raw_output
+                                            used_api = "backup-api"
+                                            used_model = "picoapps-default"
+                                else:
+                                    logger.warning("Backup API Status %s", r.status)
+                                    await asyncio.sleep(1.0)
+                    finally:
+                        # Always release the concurrency lock
+                        with API_CALL_LOCK:
+                            CURRENT_API_CALLS -= 1
+                except Exception as e:
+                    logger.warning("Backup API failed: %s", e)
+
+            # If both primary and backup failed, handle retry
             if not output:
                 if attempt == loop_count - 1:
                     return jsonify({"error": "All Inference APIs failed"}), 500
@@ -748,6 +791,10 @@ async def handle_country_request(country_code):
                 # 1. Clean formatting
                 output = re.sub(r'<think>.*?</think>', '', output, flags=re.DOTALL | re.IGNORECASE)
                 if '<think>' in output.lower(): output = re.sub(r'<think>.*', '', output, flags=re.DOTALL | re.IGNORECASE)
+                
+                # Strip ALL remaining hallucinated HTML/Markdown tags (like <blockquote>, <p>, <b>, <br>)
+                output = re.sub(r'<[^>]+>', '', output)
+
                 output = re.sub(r"^(As an AI|I'm an AI|I am an AI|I cannot|Sorry, but|Interner Fehler).*?\s*", "", output, flags=re.I)
                 output = re.sub(r'^\s*(Here is|Sure,|Okay,|I will|Response:|Reply:|Output:|Answer:|My response:|Bot:).*?(\n|$)', '', output, flags=re.I | re.MULTILINE)
                 output = output.replace("```json", "").replace("```", "")
