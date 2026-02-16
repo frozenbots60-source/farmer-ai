@@ -37,7 +37,7 @@ ANALYSIS_TIER_1 = [
 ]
 
 CHAT_TIER_1 = [
-    "tab_flash_lite_preview",
+    "gemini-2.5-flash",
     "gemini-2.5-flash",
     "gpt-4o",
     "claude-haiku-4.5"
