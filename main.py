@@ -24,7 +24,7 @@ app = Flask(__name__)
 
 # ================== API CONFIGURATION ===================
 # Primary API Base (Standard OpenAI-compatible endpoint)
-NEW_API_BASE = "http://104.168.62.69:8317/v1/chat/completions"
+NEW_API_BASE = "https://wss-api-5ca5596e4af3.herokuapp.com/v1/chat/completions"
 
 # Backup API Base (PicoApps LLM API)
 BACKUP_API_BASE = "https://backend.buildpicoapps.com/aero/run/llm-api?pk=v1-Z0FBQUFBQm5IZkJDMlNyYUVUTjIyZVN3UWFNX3BFTU85SWpCM2NUMUk3T2dxejhLSzBhNWNMMXNzZlp3c09BSTR6YW1Sc1BmdGNTVk1GY0liT1RoWDZZX1lNZlZ0Z1dqd3c9PQ=="
