@@ -452,7 +452,7 @@ def add_cors_headers(response):
     if is_allowed_origin(origin):
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response.headers["Access-Control-Allow-Methods"] "GET, POST, OPTIONS"
     return response
 
 # ----------------- New helper: fetch active users list and return usernames -----------------
@@ -798,9 +798,34 @@ async def handle_country_request(country_code):
                 
                 if len(output) > 200: output = output[:197] + "..."
 
+                # ========================================================================
+                # NEW CHECK: PREVENT ANALYSIS DATA / ERRORS IN CHAT
+                # ========================================================================
+                analysis_patterns = [
+                    r'\{.*\}', # JSON objects
+                    r'\[.*\]', # JSON arrays
+                    r'"vibe"\s*:', r'"topics"\s*:', r'"userInterest"', # Analysis keys
+                    r'"relationshipState"', r'"behaviourProfile"', r'"contextMemoryBlob"',
+                    r'^\s*vibe\s*:', r'^\s*topics\s*:', # Loose JSON-like
+                    r'\berror\b', r'\bexception\b', r'\btraceback\b', r'\bfailed\b', r'\bunauthorized\b' # Errors
+                ]
+                is_invalid_format = False
+                for pat in analysis_patterns:
+                    if re.search(pat, output, flags=re.I):
+                        logger.warning("Judge DETECTED ANALYSIS/ERROR OUTPUT ('%s'). REGENERATING...", output[:50])
+                        judge_feedback = "\nSYSTEM ALERT: Do not output JSON, analysis data, or error logs. You are a human in a chat. Generate a casual chat message."
+                        is_invalid_format = True
+                        output = ""
+                        break
+                
+                if is_invalid_format and attempt < loop_count - 1:
+                    await asyncio.sleep(1.0)
+                    continue
+                # ========================================================================
+
                 # 3. Script Check
                 latin_script_countries = ["in", "pk", "ph", "id", "vn", "tr", "de", "us", "uk", "en", "pt", "es", "fi", "ng", "no", "pl"]
-                bad_scripts_regex = r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0900-\u097F\u0980-\u09FF\u0400-\u04FF\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF\uAC00-\uD7AF\u0E00-\u0E7F]'
+                bad_scripts_regex = r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0900-\u097F\u0980-\u09FF\u0400-\u04FF\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF\uAC00-\uD7AF\u0E00-\uE7F]'
                 
                 if country_code in latin_script_countries:
                     if re.search(bad_scripts_regex, output):
