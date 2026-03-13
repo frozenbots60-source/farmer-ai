@@ -742,6 +742,15 @@ async def handle_country_request(country_code):
             
             output = str(output).strip()
 
+            # ================== FIX: CLEAN ANALYSIS JSON ==================
+            if action == "analyze":
+                # Remove markdown code blocks often used by LLMs
+                output = output.replace("```json", "").replace("```", "")
+                # Remove conversational preambles
+                output = re.sub(r'^\s*(Here is|Sure,|Okay,|I will|Response:|Output:|Analysis:).*?(\n|:)', '', output, flags=re.I | re.MULTILINE)
+                output = output.strip()
+            # ==============================================================
+
             if action == "chat":
                 # ========================================================================
                 # RIGOROUS JUDGE LOGIC
