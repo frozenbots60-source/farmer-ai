@@ -742,24 +742,18 @@ async def handle_country_request(country_code):
             
             output = str(output).strip()
 
-            # ================== ANALYSIS ENDPOINT: CLEAN JSON AND EXIT EARLY ==================
-            # NO JUDGE LOGIC FOR ANALYSIS - RETURN IMMEDIATELY AFTER CLEANING
+            # ================== ANALYSIS ENDPOINT: RETURN DIRECTLY, NO PROCESSING ==================
             if action == "analyze":
-                # Remove markdown code blocks often used by LLMs
-                output = output.replace("```json", "").replace("```", "")
-                # Remove conversational preambles
-                output = re.sub(r'^\s*(Here is|Sure,|Okay,|I will|Response:|Output:|Analysis:).*?(\n|:)', '', output, flags=re.I | re.MULTILINE)
-                output = output.strip()
-                # EARLY EXIT - Populate cache and return immediately, NO JUDGE LOGIC
+                # Populate cache and return immediately - NO JUDGE LOGIC, NO PROCESSING
                 with CACHE_LOCK:
                     ANALYSIS_CACHE[country_code] = {
                         "timestamp": time.time(),
                         "data": {"response": output, "source": used_api, "model": used_model}
                     }
                 return jsonify({"raw": {"response": output, "source": used_api, "model": used_model}}), 200
-            # ===================================================================================
+            # =========================================================================================
 
-            # ================== CHAT ENDPOINT: JUDGE LOGIC BELOW ==================
+            # ================== CHAT ENDPOINT: JUDGE LOGIC ONLY FOR CHAT ==================
             if action == "chat":
                 # ========================================================================
                 # RIGOROUS JUDGE LOGIC
@@ -808,7 +802,7 @@ async def handle_country_request(country_code):
                 if len(output) > 200: output = output[:197] + "..."
 
                 # ========================================================================
-                # NEW CHECK: PREVENT ANALYSIS DATA / ERRORS IN CHAT
+                # CHECK: PREVENT ANALYSIS DATA / ERRORS IN CHAT
                 # ========================================================================
                 analysis_patterns = [
                     r'\{.*\}', # JSON objects
