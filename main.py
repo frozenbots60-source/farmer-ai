@@ -23,13 +23,10 @@ logger = logging.getLogger("CHAT-FARMER")
 app = Flask(__name__)
 
 # ================== API CONFIGURATION ===================
-# Primary API Base (Standard OpenAI-compatible endpoint)
+# Primary API Base (WebSocket Bridge Endpoint)
 NEW_API_BASE = "https://wss-api-5ca5596e4af3.herokuapp.com/v1/chat/completions"
 
-# Backup API Base (PicoApps LLM API)
-BACKUP_API_BASE = "https://backend.buildpicoapps.com/aero/run/llm-api?pk=v1-Z0FBQUFBQm5IZkJDMlNyYUVUTjIyZVN3UWFNX3BFTU85SWpCM2NUMUk3T2dxejhLSzBhNWNMMXNzZlp3c09BSTR6YW1Sc1BmdGNTVk1GY0liT1RoWDZZX1lNZlZ0Z1dqd3c9PQ=="
-
-# Model Configurations
+# Model Configurations (Used for payload compliance, though Bridge handles the actual inference)
 ANALYSIS_TIER_1 = [
     "gpt-oss-120b-medium",
     "gemini-2.5-flash",
@@ -672,7 +669,9 @@ async def handle_country_request(country_code):
         used_api = "none"
         used_model = "none"
         
-        selected_models = ANALYSIS_TIER_1[:2] if action == "analyze" else CHAT_TIER_1[:2]
+        # Select a model name for the payload (required by OpenAI spec)
+        # The Bridge endpoint might ignore this, but we send it for validity.
+        selected_model = ANALYSIS_TIER_1[0] if action == "analyze" else CHAT_TIER_1[0]
         
         # ========================================================================
         # RETRY LOOP: WRAP API CALLS AND CHECK FOR BOT MENTIONS (MAX 3 ATTEMPTS)
@@ -685,95 +684,55 @@ async def handle_country_request(country_code):
             current_user_prompt = user_prompt + judge_feedback
             
             # --- PRIMARY API ATTEMPT ---
-            for model_name in selected_models:
+            try:
+                json_payload = {
+                    "model": selected_model,
+                    "messages": [
+                        {"role": "system", "content": system_instruction},
+                        {"role": "user", "content": current_user_prompt}
+                    ],
+                    "temperature": ai_temperature
+                }
+                
+                # 🚥 GLOBALLY RATE-LIMIT API CALLS TO PREVENT 429 HAMMERING 🚥
+                while True:
+                    with API_CALL_LOCK:
+                        if CURRENT_API_CALLS < MAX_CONCURRENT_API_CALLS:
+                            CURRENT_API_CALLS += 1
+                            break
+                    await asyncio.sleep(0.3) # Wait briefly for a slot to open up
+
                 try:
-                    json_payload = {
-                        "model": model_name,
-                        "messages": [
-                            {"role": "system", "content": system_instruction},
-                            {"role": "user", "content": current_user_prompt}
-                        ],
-                        "temperature": ai_temperature
-                    }
-                    
-                    # 🚥 GLOBALLY RATE-LIMIT API CALLS TO PREVENT 429 HAMMERING 🚥
-                    while True:
-                        with API_CALL_LOCK:
-                            if CURRENT_API_CALLS < MAX_CONCURRENT_API_CALLS:
-                                CURRENT_API_CALLS += 1
-                                break
-                        await asyncio.sleep(0.3) # Wait briefly for a slot to open up
+                    logger.info("Calling API: %s (Model: %s, Temp: %s) [Active Calls: %d]", NEW_API_BASE, selected_model, ai_temperature, CURRENT_API_CALLS)
+                    # Increased timeout to 60s for WebSocket bridge latency
+                    timeout = aiohttp.ClientTimeout(total=60)
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                        async with session.post(NEW_API_BASE, json=json_payload) as r:
+                            if r.status == 200:
+                                ai_data = await r.json()
+                                choices = ai_data.get("choices", [])
+                                if choices and len(choices) > 0:
+                                    raw_output = choices[0].get("message", {}).get("content", "")
+                                    if raw_output:
+                                        output = raw_output
+                                        used_api = "primary-api"
+                                        used_model = selected_model
+                            elif r.status == 429:
+                                logger.warning("API Status 429. Backing off to prevent ban...")
+                                await asyncio.sleep(2.0) # Penalty cooldown
+                            else:
+                                logger.warning("API Status %s", r.status)
+                                await asyncio.sleep(1.0)
+                finally:
+                    # Always release the concurrency lock
+                    with API_CALL_LOCK:
+                        CURRENT_API_CALLS -= 1
 
-                    try:
-                        logger.info("Calling API: %s (Model: %s, Temp: %s) [Active Calls: %d]", NEW_API_BASE, model_name, ai_temperature, CURRENT_API_CALLS)
-                        timeout = aiohttp.ClientTimeout(total=15)
-                        async with aiohttp.ClientSession(timeout=timeout) as session:
-                            async with session.post(NEW_API_BASE, json=json_payload) as r:
-                                if r.status == 200:
-                                    ai_data = await r.json()
-                                    choices = ai_data.get("choices", [])
-                                    if choices and len(choices) > 0:
-                                        raw_output = choices[0].get("message", {}).get("content", "")
-                                        if raw_output:
-                                            output = raw_output
-                                            used_api = "primary-api"
-                                            used_model = model_name
-                                            break
-                                elif r.status == 429:
-                                    logger.warning("API Status 429. Backing off to prevent ban...")
-                                    await asyncio.sleep(2.0) # Penalty cooldown
-                                else:
-                                    logger.warning("API Status %s", r.status)
-                                    await asyncio.sleep(1.0)
-                    finally:
-                        # Always release the concurrency lock
-                        with API_CALL_LOCK:
-                            CURRENT_API_CALLS -= 1
+            except Exception as e:
+                logger.warning("API failed: %s", e)
+                await asyncio.sleep(1.0)
 
-                except Exception as e:
-                    logger.warning("API model %s failed: %s", model_name, e)
-                    await asyncio.sleep(1.0)
-                    continue 
-
-            # --- BACKUP API ATTEMPT (If primary models failed) ---
-            if not output:
-                try:
-                    logger.info("Primary API failed. Falling back to BACKUP API...")
-                    # Combine instructions for single-prompt API format
-                    backup_prompt = f"{system_instruction}\n\n{current_user_prompt}"
-                    json_payload_backup = {"prompt": backup_prompt}
-
-                    # Wait for a concurrency slot
-                    while True:
-                        with API_CALL_LOCK:
-                            if CURRENT_API_CALLS < MAX_CONCURRENT_API_CALLS:
-                                CURRENT_API_CALLS += 1
-                                break
-                        await asyncio.sleep(0.3)
-
-                    try:
-                        timeout = aiohttp.ClientTimeout(total=15)
-                        async with aiohttp.ClientSession(timeout=timeout) as session:
-                            async with session.post(BACKUP_API_BASE, json=json_payload_backup) as r:
-                                if r.status == 200:
-                                    ai_data = await r.json()
-                                    if ai_data.get("status") == "success":
-                                        raw_output = ai_data.get("text", "")
-                                        if raw_output:
-                                            output = raw_output
-                                            used_api = "backup-api"
-                                            used_model = "picoapps-default"
-                                else:
-                                    logger.warning("Backup API Status %s", r.status)
-                                    await asyncio.sleep(1.0)
-                    finally:
-                        # Always release the concurrency lock
-                        with API_CALL_LOCK:
-                            CURRENT_API_CALLS -= 1
-                except Exception as e:
-                    logger.warning("Backup API failed: %s", e)
-
-            # If both primary and backup failed, handle retry
+            # If API failed, handle retry
             if not output:
                 if attempt == loop_count - 1:
                     return jsonify({"error": "All Inference APIs failed"}), 500
@@ -789,8 +748,8 @@ async def handle_country_request(country_code):
                 # ========================================================================
                 
                 # 1. Clean formatting
-                output = re.sub(r'<think>.*?</think>', '', output, flags=re.DOTALL | re.IGNORECASE)
-                if '<think>' in output.lower(): output = re.sub(r'<think>.*', '', output, flags=re.DOTALL | re.IGNORECASE)
+                output = re.sub(r'-transitional.*?__', '', output, flags=re.DOTALL | re.IGNORECASE)
+                if '-transitional' in output.lower(): output = re.sub(r'-transitional.*', '', output, flags=re.DOTALL | re.IGNORECASE)
                 
                 # Strip ALL remaining hallucinated HTML/Markdown tags (like <blockquote>, <p>, <b>, <br>)
                 output = re.sub(r'<[^>]+>', '', output)
