@@ -23,21 +23,15 @@ logger = logging.getLogger("CHAT-FARMER")
 app = Flask(__name__)
 
 # ================== API CONFIGURATION ===================
-# Primary API Base (WebSocket Bridge Endpoint)
+# Primary API Base (WebSocket Bridge Endpoint) - Used for ANALYSIS only
 NEW_API_BASE = "https://wss-api-5ca5596e4af3.herokuapp.com/v1/chat/completions"
 
-# Model Configurations (Used for payload compliance, though Bridge handles the actual inference)
-ANALYSIS_TIER_1 = [
-    "gpt-oss-120b-medium",
-    "gemini-2.5-flash",
-    "claude-haiku-4.5"
-]
+# Gemini API for CHAT text generation (GET method)
+GEMINI_API_BASE = "https://gemini.rudyy.workers.dev/chat"
 
-CHAT_TIER_1 = [
-    "gemini-2.5-flash",
-    "gemini-2.5-flash",
-    "gpt-4o",
-    "claude-haiku-4.5"
+# Model Configurations (Used for ANALYSIS only - Copilot)
+ANALYSIS_TIER_1 = [
+    "copilot"
 ]
 
 # Global History to prevent swarm repetition (Last 20 messages across ALL users)
@@ -671,7 +665,7 @@ async def handle_country_request(country_code):
         
         # Select a model name for the payload (required by OpenAI spec)
         # The Bridge endpoint might ignore this, but we send it for validity.
-        selected_model = ANALYSIS_TIER_1[0] if action == "analyze" else CHAT_TIER_1[0]
+        selected_model = ANALYSIS_TIER_1[0] if action == "analyze" else "gemini"
         
         # ========================================================================
         # RETRY LOOP: WRAP API CALLS AND CHECK FOR BOT MENTIONS (MAX 3 ATTEMPTS)
@@ -683,54 +677,99 @@ async def handle_country_request(country_code):
         for attempt in range(loop_count):
             current_user_prompt = user_prompt + judge_feedback
             
-            # --- PRIMARY API ATTEMPT ---
-            try:
-                json_payload = {
-                    "model": selected_model,
-                    "messages": [
-                        {"role": "system", "content": system_instruction},
-                        {"role": "user", "content": current_user_prompt}
-                    ],
-                    "temperature": ai_temperature
-                }
-                
-                # 🚥 GLOBALLY RATE-LIMIT API CALLS TO PREVENT 429 HAMMERING 🚥
-                while True:
-                    with API_CALL_LOCK:
-                        if CURRENT_API_CALLS < MAX_CONCURRENT_API_CALLS:
-                            CURRENT_API_CALLS += 1
-                            break
-                    await asyncio.sleep(0.3) # Wait briefly for a slot to open up
-
+            # --- ANALYSIS: USE COPILOT VIA WEBSOCKET BRIDGE API ---
+            if action == "analyze":
                 try:
-                    logger.info("Calling API: %s (Model: %s, Temp: %s) [Active Calls: %d]", NEW_API_BASE, selected_model, ai_temperature, CURRENT_API_CALLS)
-                    # Increased timeout to 60s for WebSocket bridge latency
-                    timeout = aiohttp.ClientTimeout(total=60)
-                    async with aiohttp.ClientSession(timeout=timeout) as session:
-                        async with session.post(NEW_API_BASE, json=json_payload) as r:
-                            if r.status == 200:
-                                ai_data = await r.json()
-                                choices = ai_data.get("choices", [])
-                                if choices and len(choices) > 0:
-                                    raw_output = choices[0].get("message", {}).get("content", "")
-                                    if raw_output:
-                                        output = raw_output
-                                        used_api = "primary-api"
-                                        used_model = selected_model
-                            elif r.status == 429:
-                                logger.warning("API Status 429. Backing off to prevent ban...")
-                                await asyncio.sleep(2.0) # Penalty cooldown
-                            else:
-                                logger.warning("API Status %s", r.status)
-                                await asyncio.sleep(1.0)
-                finally:
-                    # Always release the concurrency lock
-                    with API_CALL_LOCK:
-                        CURRENT_API_CALLS -= 1
+                    json_payload = {
+                        "model": "copilot",
+                        "messages": [
+                            {"role": "system", "content": system_instruction},
+                            {"role": "user", "content": current_user_prompt}
+                        ],
+                        "temperature": ai_temperature
+                    }
+                    
+                    # 🚥 GLOBALLY RATE-LIMIT API CALLS TO PREVENT 429 HAMMERING 🚥
+                    while True:
+                        with API_CALL_LOCK:
+                            if CURRENT_API_CALLS < MAX_CONCURRENT_API_CALLS:
+                                CURRENT_API_CALLS += 1
+                                break
+                        await asyncio.sleep(0.3) # Wait briefly for a slot to open up
 
-            except Exception as e:
-                logger.warning("API failed: %s", e)
-                await asyncio.sleep(1.0)
+                    try:
+                        logger.info("Calling ANALYSIS API (Copilot): %s [Active Calls: %d]", NEW_API_BASE, CURRENT_API_CALLS)
+                        # Increased timeout to 60s for WebSocket bridge latency
+                        timeout = aiohttp.ClientTimeout(total=60)
+                        async with aiohttp.ClientSession(timeout=timeout) as session:
+                            async with session.post(NEW_API_BASE, json=json_payload) as r:
+                                if r.status == 200:
+                                    ai_data = await r.json()
+                                    choices = ai_data.get("choices", [])
+                                    if choices and len(choices) > 0:
+                                        raw_output = choices[0].get("message", {}).get("content", "")
+                                        if raw_output:
+                                            output = raw_output
+                                            used_api = "copilot-api"
+                                            used_model = "copilot"
+                                elif r.status == 429:
+                                    logger.warning("API Status 429. Backing off to prevent ban...")
+                                    await asyncio.sleep(2.0) # Penalty cooldown
+                                else:
+                                    logger.warning("API Status %s", r.status)
+                                    await asyncio.sleep(1.0)
+                    finally:
+                        # Always release the concurrency lock
+                        with API_CALL_LOCK:
+                            CURRENT_API_CALLS -= 1
+
+                except Exception as e:
+                    logger.warning("Analysis API failed: %s", e)
+                    await asyncio.sleep(1.0)
+
+            # --- CHAT: USE GEMINI API (GET METHOD) ---
+            else:
+                try:
+                    # 🚥 GLOBALLY RATE-LIMIT API CALLS TO PREVENT 429 HAMMERING 🚥
+                    while True:
+                        with API_CALL_LOCK:
+                            if CURRENT_API_CALLS < MAX_CONCURRENT_API_CALLS:
+                                CURRENT_API_CALLS += 1
+                                break
+                        await asyncio.sleep(0.3) # Wait briefly for a slot to open up
+
+                    try:
+                        # Combine system instruction and user prompt for Gemini
+                        full_prompt = f"{system_instruction}\n\n{current_user_prompt}"
+                        encoded_prompt = quote(full_prompt)
+                        gemini_url = f"{GEMINI_API_BASE}?message={encoded_prompt}"
+                        
+                        logger.info("Calling GEMINI API for CHAT: %s [Active Calls: %d]", GEMINI_API_BASE, CURRENT_API_CALLS)
+                        timeout = aiohttp.ClientTimeout(total=60)
+                        async with aiohttp.ClientSession(timeout=timeout) as session:
+                            async with session.get(gemini_url) as r:
+                                if r.status == 200:
+                                    gemini_data = await r.json()
+                                    if gemini_data.get("success"):
+                                        raw_output = gemini_data.get("response", "")
+                                        if raw_output:
+                                            output = raw_output
+                                            used_api = "gemini-api"
+                                            used_model = "gemini"
+                                elif r.status == 429:
+                                    logger.warning("Gemini API Status 429. Backing off...")
+                                    await asyncio.sleep(2.0)
+                                else:
+                                    logger.warning("Gemini API Status %s", r.status)
+                                    await asyncio.sleep(1.0)
+                    finally:
+                        # Always release the concurrency lock
+                        with API_CALL_LOCK:
+                            CURRENT_API_CALLS -= 1
+
+                except Exception as e:
+                    logger.warning("Gemini API failed: %s", e)
+                    await asyncio.sleep(1.0)
 
             # If API failed, handle retry
             if not output:
