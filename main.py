@@ -258,10 +258,17 @@ Core Personality:
 - You type like you are on a phone with a cracked screen (no capitalization, no periods at end).
 - Use abbreviations (u, r, lol, k, thx, rn, tbh).
 - NEVER write long paragraphs. Keep it 1 short sentence max.
-- If you are losing, sound tilted/annoyed. If winning, flex a little but don't look like a bot and also if your last messeges say losing dont say again and again try changing the topic to something else.
 - STRICT RULE: Use ONLY the standard characters for your language. Do NOT switch scripts.
 - STRICT RULE: NO POLITICS, NO RELIGION, NO STREAMERS.
 - ANTI-FARMING: Don't just ask "how are you". Talk about luck, the game, or money.
+
+CRITICAL ANTI-REPETITION RULES:
+1. NEVER repeat the same message, phrase, or theme you've said before.
+2. ROTATE YOUR TOPICS: Switch between - wins, losses, games, luck, site vibes, questions, random observations.
+3. EMOTIONAL VARIETY: Don't be stuck on "losing". Sometimes be: neutral, curious, excited, amused, bored, hopeful.
+4. If you talked about losing recently, your NEXT message MUST be about something DIFFERENT (a game, luck, someone else, the site, or a random thought).
+5. NEVER say the same thing twice in a row. Each message must be UNIQUE and FRESH.
+6. VARY your sentence structure. Don't start every message the same way.
 
 IMPORTANT: You MUST speak in {lang}. Do not sound like a customer support agent. Be a degenerate gambler.
 """
@@ -310,10 +317,15 @@ Current chat context:
 {safety}
 
 The chat is dead. Send a message to wake it up, but DO NOT sound like a "farming bot".
-- BAD: "Hello everyone", "How are you", "Any winners?"
-- GOOD: Complain about a loss, mention a specific game, or make a random observation about luck.
+
+CRITICAL INSTRUCTIONS:
+- BAD: "Hello everyone", "How are you", "Any winners?", "lost again", "rip balance"
+- GOOD: Make a random observation, ask about a specific game, mention site luck, or crack a joke.
+- MANDATORY TOPIC ROTATION: Pick ONE topic randomly: [games, luck, site speed, weather/feeling, random observation, question about strategies, someone's win]
+- DO NOT default to complaining about losses. That's repetitive and boring.
 - Keep it lowercase and short (max 8 words).
 - Use slang.
+- Your message MUST be completely DIFFERENT from anything you've said before.
 Language: {lang}
 
 Here are your previous messages for context:
@@ -337,12 +349,16 @@ Current chat context:
 {safety}
 
 Reply to a user who mentioned you.
+
+CRITICAL INSTRUCTIONS:
 - Tag them with @username (NO parentheses).
 - If [MODERATOR] is present, be polite but short.
 - If multiple people tagged you, pick the most interesting one to reply to (don't spam 3 messages).
 - Act like a real human: intentionally ignore punctuation.
 - Don't use emojies excessively (max 1).
 - Keep it very short - maximum 6 words.
+- VARY your response style: sometimes agree, sometimes joke, sometimes question, sometimes react.
+- DO NOT always complain or be negative. Mix it up!
 Language: {lang}
 
 Here are your previous messages for context:
@@ -369,10 +385,14 @@ Current chat context:
 {active_users_list}
 
 Select a message from a user and reply to them.
+
+CRITICAL INSTRUCTIONS:
 - Tag them with @username (no parentheses).
 - ONLY reply if their message is interesting. If they just said "hi", say something cool back or ignore it.
 - Do NOT sound like a support bot. Be casual.
 - Maximum 5-9 words only.
+- TOPIC VARIETY: Don't just talk about losing. React to WHAT THEY SAID - if they mentioned a game, talk about games. If they mentioned luck, talk about luck.
+- EMOTIONAL VARIETY: Match their energy but don't be a downer every time.
 Language: {lang}
 
 Here are your previous messages for context:
@@ -398,9 +418,13 @@ Current chat context:
 {safety}
 
 Say something to the chat without tagging anyone.
+
+CRITICAL INSTRUCTIONS:
 - It must fit the current vibe (if people are angry, don't be happy).
-- Avoid generic questions like "how is everyone". 
-- Instead: React to the "site luck", a specific game, or your own balance.
+- TOPIC ROTATION IS MANDATORY: Pick from these themes randomly: [specific game name, luck today, site vibe, question to chat, random funny observation, encouraging message, curious question]
+- AVOID GENERIC MESSAGES: No "how is everyone", no "any winners", no "rip balance" on repeat.
+- AVOID LOSS COMPLAINTS: You've complained about losing enough. Talk about something ELSE now.
+- Each message must be FRESH and DIFFERENT from your last 5 messages.
 - EXAMPLES (Use these for STYLE, do not copy text): 
   [{style_examples}]
 
@@ -576,7 +600,8 @@ async def handle_country_request(country_code):
             global_uniqueness_instruction = (
                 f"\n\nGLOBAL SWARM HISTORY (DO NOT REPEAT OR SOUND LIKE THESE):"
                 f"\n[{global_context_msgs}]\n"
-                f"Ensure your response is distinct from the text above."
+                f"Ensure your response is COMPLETELY DIFFERENT from all messages above. "
+                f"Use different words, different topic, different style."
             )
 
         # 4. Construct Prompts based on Action
@@ -860,20 +885,65 @@ async def handle_country_request(country_code):
                     await asyncio.sleep(1.0)
                     continue
 
-                # 7. SIMILARITY CHECK 
+                # 7. SIMILARITY CHECK (Lowered threshold from 0.8 to 0.7 for stricter checking)
                 is_duplicate = False
                 if output:
                     for old_msg in list(GLOBAL_BOT_HISTORY):
                         ratio = difflib.SequenceMatcher(None, output.lower(), old_msg.lower()).ratio()
-                        if ratio > 0.8:
+                        if ratio > 0.7:  # Lowered from 0.8
                             logger.warning("Judge DETECTED SIMILARITY (Ratio: %.2f) to old message: '%s'. REGENERATING...", ratio, old_msg)
-                            judge_feedback = f"\nSYSTEM ALERT: You just said '{output}', which is too similar to a recent message. Say something completely different."
+                            judge_feedback = f"\nSYSTEM ALERT: You just said '{output}', which is too similar to a recent message. Say something COMPLETELY DIFFERENT with different words and a different topic."
                             is_duplicate = True
                             output = ""
                             break
                 if is_duplicate and attempt < loop_count - 1:
                     await asyncio.sleep(1.0)
                     continue
+
+                # 8. TOPIC STAGNATION CHECK - Detect if stuck on "loss" theme
+                loss_keywords = ['loss', 'lost', 'lose', 'losing', 'broke', 'bancrot', 'zero', 'rungkad', 'olats', 
+                                 'thua', 'härviö', 'perdi', 'khasirt', 'fail', 'dead', 'rip', 'skinned', 'battu',
+                                 'gone', 'down bad', 'liquidated', 'rekt', 'wiped']
+                stuck_on_loss = False
+                if output:
+                    output_lower = output.lower()
+                    loss_count = sum(1 for kw in loss_keywords if kw in output_lower)
+                    if loss_count > 0:
+                        # Check recent history for loss themes
+                        recent_loss_count = 0
+                        for old_msg in list(GLOBAL_BOT_HISTORY)[-5:]:  # Last 5 messages
+                            old_lower = old_msg.lower()
+                            recent_loss_count += sum(1 for kw in loss_keywords if kw in old_lower)
+                        
+                        if recent_loss_count >= 2:  # If 2+ recent messages about loss
+                            logger.warning("Judge DETECTED TOPIC STAGNATION on loss theme. REGENERATING...")
+                            judge_feedback = "\nSYSTEM ALERT: You've been talking about losing too much. CHANGE THE TOPIC COMPLETELY. Talk about games, luck, the site, ask a question, or make a random observation. NO MORE LOSS COMPLAINTS."
+                            stuck_on_loss = True
+                            output = ""
+                
+                if stuck_on_loss and attempt < loop_count - 1:
+                    await asyncio.sleep(1.0)
+                    continue
+
+                # 9. WORD REPETITION CHECK - Check if same words repeated
+                if output:
+                    words = output.lower().split()
+                    if len(words) >= 2:
+                        word_counts = {}
+                        for word in words:
+                            word_counts[word] = word_counts.get(word, 0) + 1
+                        # If any word appears 3+ times in a short message
+                        repeated_word = False
+                        for word, count in word_counts.items():
+                            if count >= 3 and len(word) > 2:
+                                logger.warning("Judge DETECTED WORD REPETITION: '%s' appears %d times. REGENERATING...", word, count)
+                                judge_feedback = f"\nSYSTEM ALERT: You repeated the word '{word}' too many times. Generate a natural, varied message."
+                                repeated_word = True
+                                output = ""
+                                break
+                        if repeated_word and attempt < loop_count - 1:
+                            await asyncio.sleep(1.0)
+                            continue
 
                 if output:
                     GLOBAL_BOT_HISTORY.append(output)
