@@ -24,7 +24,7 @@ app = Flask(__name__)
 
 # ================== API CONFIGURATION ===================
 # Gemini API for BOTH analysis and chat (GET method)
-GEMINI_API_BASE = "https://back-api.kustbotsweb.workers.dev/chat"
+GEMINI_API_BASE = "https://gemini.rudyy.workers.dev/chat"
 
 # Global History to prevent swarm repetition (Last 20 messages across ALL users)
 GLOBAL_BOT_HISTORY = deque(maxlen=20)
