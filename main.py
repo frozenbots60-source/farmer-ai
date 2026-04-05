@@ -1,838 +1,970 @@
-# main.py
-# KUST BOTS OFFICIAL SUPPORT SYSTEM (Production Release - V4 KustX)
-# Single-File Flask Application with Server-Sent Events (SSE) Streaming
-# Features: Natural AI, Robust Search, Auto-Cleaning UI, Smart Context.
-
 import os
-import re
-import time
-import json
-import uuid
+import random
 import logging
-import requests
-import sys
-from flask import Flask, request, jsonify, Response, render_template_string, stream_with_context
+import json
+import re
+import asyncio
+import aiohttp
+import difflib
+import time
+import threading
+from flask import Flask, request, jsonify
+from urllib.parse import urlparse, quote
+from collections import deque
 
-# ----------------------------
-# 1. Configuration & Logging
-# ----------------------------
+# ================== LOGGING ===================
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] KUST: %(message)s",
-    datefmt="%H:%M:%S",
-    stream=sys.stdout
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
-logger = logging.getLogger("kust-support")
+logger = logging.getLogger("CHAT-FARMER")
+# ==============================================
 
-INFERENCE_KEY = os.getenv("INFERENCE_KEY", "")
-INFERENCE_MODEL_ID = os.getenv("INFERENCE_MODEL_ID", "")
-BASE_URL = os.getenv("INFERENCE_URL", "")
+app = Flask(__name__)
 
-# ----------------------------
-# Telegram Bot settings (user-provided token & channel)
-# ----------------------------
-# NOTE: You provided the following — keep secure.
-TELEGRAM_BOT_TOKEN = "8127386338:AAFLgLGp3KX2NI85kxEpSytz8k1GO5DSZww"
-TELEGRAM_CHANNEL_ID = "-1002056355467"
+# ================== API CONFIGURATION ===================
+# Gemini API for BOTH analysis and chat (GET method)
+GEMINI_API_BASE = "https://back-api.kustbotsweb.workers.dev/chat"
 
-if not (INFERENCE_KEY and INFERENCE_MODEL_ID and BASE_URL):
-    logger.error("⚠️ CRITICAL: Missing INFERENCE env vars.")
+# Global History to prevent swarm repetition (Last 20 messages across ALL users)
+GLOBAL_BOT_HISTORY = deque(maxlen=20)
 
-API_URL = f"{BASE_URL.rstrip('/')}/v1/chat/completions"
-HEADERS = {
-    "Authorization": f"Bearer {INFERENCE_KEY}",
-    "Content-Type": "application/json"
-}
+# ================== CACHING & RATE LIMITING ===================
+# Analysis Cache (10 minutes)
+ANALYSIS_CACHE = {}
+ANALYSIS_IN_PROGRESS = {}
+CACHE_TTL_SECONDS = 600
+CACHE_LOCK = threading.Lock()
 
-logger.info(f"System Initialized. Model: {INFERENCE_MODEL_ID}")
+# Concurrency Control to prevent 429s (Max simultaneous API calls)
+MAX_CONCURRENT_API_CALLS = 3
+CURRENT_API_CALLS = 0
+API_CALL_LOCK = threading.Lock()
+# ========================================================
 
-# ----------------------------
-# 2. Knowledge Base (Business Logic)
-# ----------------------------
-KB = {
-    "projects": {
-        "stake_chat_farmer": {
-            "name": "Stake Chat Farmer",
-            "access": "@kustchatbot",
-            "price": "Free 3-hour trial available for new users",
-            "features": [
-                "Autonomous chat generator (not spam — human-like behavioural model)",
-                "Farms Rains 24/7 without interruptions",
-                "Multi-account support for users managing several Stake accounts",
-                "Works on all Stake servers and mirror links",
-                "AI-driven adaptive responses based on mood & chat context",
-                "Low CPU usage, runs entirely in browser through custom extension",
-                "Automatic reconnection if tab reloads or browser restarts",
-                "Hindi setup video provided inside the bot"
-            ],
-            "setup": [
-                "1. Start @kustchatbot",
-                "2. If you are new: Tap **Get Your Trial Now**",
-                "3. Enter your real Stake username (CASE-SENSITIVE; must match exactly)",
-                "4. Bot provides an **unpacked extension** (.zip)",
-                "5. Unzip the folder on your PC",
-                "6. Open Chrome → go to **chrome://extensions**",
-                "7. Enable **Developer Mode** (top-right)",
-                "8. Click **Load Unpacked** and select the unzipped extension folder",
-                "9. Open Stake.com or any Stake mirror (example: https://stake.com/casino/games/mines)",
-                "10. Open Extensions panel → enable the Stake Chat Farmer extension",
-                "11. Refresh the Stake page → a popup appears on the left-hand side",
-                "12. If your trial or subscription is active, you will see **Enable AI** → click it",
-                "13. Chat Farmer will begin farming XP/Levels automatically",
-                "14. If trial expired: Open @kustchatbot → /start → Buy Subscription",
-                "15. Enter Stake username again → choose payment method (Crypto or UPI)",
-                "16. UPI = processed manually; Crypto = processed via automated Val/Oxa Pay",
-                "17. Once payment is confirmed, extension instantly activates"
-            ],
-            "notes": [
-                "Username must match Stake exactly — incorrect casing → auto-reject",
-                "Do not rename extension folder; Chrome will not load it",
-                "Bot also shows a **Hindi setup video** for easy onboarding"
-            ]
-        },
-
-        "stake_code_claimer": {
-            "name": "Stake Code Claimer",
-            "info": (
-                "Monitors selected channels, groups, and feeds in real-time and "
-                "claims Stake codes instantly across multiple accounts. Designed "
-                "for 24/7 execution with minimal delays. Works even on high-latency "
-                "connections due to optimized parallel request logic."
-            )
-        },
-
-        "frozen_music": {
-            "name": "Frozen Music Bot",
-            "bot": "@vcmusiclubot",
-            "commands": ["/play", "/vplay", "/playlist", "/skip", "/pause", "/resume", "/stop", "/end", "/couple", "/ping", "/clear", "/mute", "/unmute", "/tmute", "/kick", "/ban", "/unban"],
-            "features": [
-                "High-performance VC music streaming with ultra-low latency",
-                "Video playback support in groups and channels",
-                "Distributed backend: metadata servers, routing servers, playback nodes",
-                "Multi-layer caching for instant replay performance",
-                "Pre-caching when songs are queued → near-zero wait time",
-                "Load-balanced playback nodes (each ~10 concurrent VCs)",
-                "RR (Real-time Redirect) stream fetching + fallback yt-dlp pipeline",
-                "Cloudflare Worker event-based routing for stable global performance"
-            ]
-        },
-
-        "kustify_hosting": {
-            "name": "Kustify Hosting",
-            "bot": "@kustifybot",
-            "plans": {
-                "Ember": "$1.44/mo (0.25 CPU / 512MB RAM)",
-                "Flare": "$2.16/mo (0.5 CPU / 1GB RAM)",
-                "Inferno": "$3.60/mo (1 CPU / 2GB RAM)"
-            },
-            "info": (
-                "Deploy instantly using /host. Designed for Telegram bots, APIs, "
-                "small web servers, and automation tasks. Stopped bots cost 2 sparks/day "
-                "to preserve data and storage integrity. Optimized for developers "
-                "needing low-cost, fast deployment."
-            )
-        },
-
-        "custom_bots": {
-            "name": "Paid Custom Bots",
-            "pricing": (
-                "Simple commands: $2–$5 each. Music bots: $4/mo (Tier 1) up to $20/mo (Tier 3). "
-                "Complex systems priced based on features and infrastructure load."
-            ),
-            "info": (
-                "White-label solutions for businesses or personal use. Includes music bots, "
-                "automation bots, management bots, API bots, and highly customized workflows. "
-                "All deployments include updates, monitoring, and optional hosting through Kustify."
-            )
-        }
+COUNTRY_CONFIG = {
+    "de": {
+        "lang": "German (Deutsch) - Street Slang",
+        "vibe": "Young German gambler. Uses 'Digga', 'Alter', 'Safe', 'Junge', 'Lost', 'Wyld'. Writes in lowercase mostly.",
+        "questions": [
+            "digga was geht heute?", "komplett lost heute...", "jemand am gewinnen?", 
+            "digga dieser slot ist tot", "alter was ein pech"
+        ]
     },
-
-    # ----------------------------
-    # Added: Detailed information about the owner / primary developer ("me")
-    # ----------------------------
-    "about_me": {
-        "preferred_name": "Kust",
-        "primary_telegram": "@KustDev",
-        "other_telegram_handles": ["@KustBots", "@KustBotsNetwork", "@kustbotssupport", "@KustXoffical"],
-        "brand": {
-            "public_name": "Kust Bots",
-            "github_primary": "kustbots",
-            "github_alternate": "XyloBots"
-        },
-        "website": "https://frozenmusic.vercel.app/",
-        "main_system": {
-            "cpu": "Intel i5-12400F",
-            "gpu": "RTX 3080 Ti",
-            "notes": "Primary development workstation"
-        },
-        "infrastructure_projects": [
-            "Frozen Music (VC bot) running distributed playback nodes",
-            "Raspberry Pi cluster (35 nodes) used for backend experiments",
-            "Custom distributed downloader API using Flask + yt-dlp",
-            "Cloudflare Workers for command routing and lightweight APIs",
-            "YouTube Audio/Video Downloader API (minimal resource usage design)"
-        ],
-        "developer_skills": [
-            "Full-stack development (frontend, backend, DB, hosting)",
-            "Telegram bot development (Pyrogram/pytgcalls)",
-            "Flask, Cloudflare Workers, Docker, Linux",
-            "Distributed systems and caching",
-            "AI scraping/monitoring pipelines (custom LLM/data collection)",
-            "Unreal Engine 5 (working on a Valorant-style mobile shooter)",
-            "Payment integration handling (PayPal sandbox / manual UPI flows)"
-        ],
-        "notable_activity": [
-            "Maintains a Telegram-based database with large-scale media crawling (~150M files historically referenced)",
-            "Runs multiple GPUs for ML and scraping tasks",
-            "Manually processes payments for Indian clients; PayPal sandbox 'frozen-bots' created for testing"
-        ],
-        "work_style": "Long-term focused; prefers owning platform and building direct audience rather than relying on third-party platforms."
+    "tr": {
+        "lang": "Turkish (Türkçe)",
+        "vibe": "Turkish gambler. Uses 'Abi', 'Kral', 'Hocam', 'Lan' (casually), 'Vallah'. Emotional and loud.",
+        "questions": [
+            "abi bu ne ya?", "kral taktik var mı?", "bugün kasa eridi resmen", 
+            "vallah battık beyler", "selam beyler durumlar ne"
+        ]
     },
-
-    "compliance": {
-        "official": ["@kustbots", "@kustbotschat", "@KustDev"],
-        "warn": (
-            "Beware of impersonators. We NEVER discuss gambling bonuses, drops, "
-            "predictions, weekly/monthly offers, or anything related to promotional gambling content. "
-            "Always verify usernames before interacting."
-        )
+    "pt": {
+        "lang": "Portuguese (Português - Brazil)",
+        "vibe": "Brazilian gambler. Uses 'Mano', 'Velho', 'Nossa', 'Top', 'Zica'. Casual and friendly.",
+        "questions": [
+            "e aí mano tudo certo?", "nossa que azar hoje", "alguém forrando?", 
+            "hoje tá osso", "bora recuperar galera"
+        ]
+    },
+    "en": {
+        "lang": "Casual English",
+        "vibe": "Bored gambler. Uses 'bruh', 'lol', 'rip', 'gg', 'scam', 'dry'. mostly lowercase.",
+        "questions": [
+            "yo any huge wins?", "rip my balance lol", "site is so dry rn", 
+            "bruh this game is rigged", "gl everyone"
+        ]
+    },
+    "us": {
+        "lang": "American English",
+        "vibe": "US gambler. Uses 'bro', 'dude', 'wild', 'fr', 'no cap', 'bet'.",
+        "questions": [
+            "yo what's good chat", "bro i'm down bad", "anyone printing?", 
+            "this is wild fr", "let's get it"
+        ]
+    },
+    "uk": {
+        "lang": "British English",
+        "vibe": "UK Lad. Uses 'mate', 'innit', 'bruv', 'proper', 'dead'.",
+        "questions": [
+            "alright lads?", "proper dead today innit", "any luck mates?", 
+            "cheers for the luck", "bit quiet yeah?"
+        ]
+    },
+    "ph": {
+        "lang": "Tagalog / Taglish",
+        "vibe": "Filipino gambler. Uses 'lods', 'pre', 'awit', 'sana all', 'olats'.",
+        "questions": [
+            "kamusta mga lods", "awit talo na naman", "sana all nananalo", 
+            "pre ano laro ngayon?", "may swerte ba?"
+        ]
+    },
+    "jp": {
+        "lang": "Japanese (Casual/Slang)",
+        "vibe": "Japanese gambler. Uses 'maji', 'yabai', 'w', 'kusa', 'gachi'.",
+        "questions": [
+            "みんな調子どう？", "まじで勝てんw", "やばい、溶けた...", 
+            "誰か当たりきてる？", "今日はダメかもw"
+        ]
+    },
+    "pl": {
+        "lang": "Polish (Polski)",
+        "vibe": "Polish gambler. Uses 'kurde', 'siema', 'masakra', 'ja pier...', 'lol'.",
+        "questions": [
+            "siema pany jak idzie", "kurde ale lipa dzisiaj", "wygrał ktoś coś?", 
+            "masakra z tym slotem", "powodzenia all"
+        ]
+    },
+    "th": {
+        "lang": "Thai",
+        "vibe": "Thai gambler. Uses '555' (laugh), 'sad', 'su su'.",
+        "questions": [
+            "วันนี้เป็นไงบ้างครับ", "หมดตัวแล้ว 555", "มีใครบวกบ้าง", 
+            "สู้ๆ นะทุกคน", "วันนี้เงียบจัง"
+        ]
+    },
+    "kr": {
+        "lang": "Korean (Casual)",
+        "vibe": "Korean gambler. Uses 'zz', 'keke', 'hul', 'shibal' (softly).",
+        "questions": [
+            "형님들 오늘 어때요?", "아이고 다 잃었네...", "대박 터진 분?", 
+            "오늘 너무 안되네요 ㅠㅠ", "다들 ㅎㅇㅌ"
+        ]
+    },
+    "ru": {
+        "lang": "Russian (Slang)",
+        "vibe": "Russian gambler. Uses 'brat', 'blin', 'gg', 'scam', 'zaebal'.",
+        "questions": [
+            "ку всем, как оно?", "блин все слил", "есть живые?", 
+            "удачи пацаны", "сегодня не мой день"
+        ]
+    },
+    "vn": {
+        "lang": "Vietnamese",
+        "vibe": "Vietnamese gambler. Uses 'bac', 'vl', 'vai', 'chan', 'anh em'.",
+        "questions": [
+            "chào anh em, nay thế nào", "vãi thật thua hết rồi", "có ai về bờ không", 
+            "chán quá game hút máu", "chúc ae may mắn"
+        ]
+    },
+    "fi": {
+        "lang": "Finnish",
+        "vibe": "Finnish gambler. Uses 'moi', 'vittu' (lightly), 'perkele', 'noni'.",
+        "questions": [
+            "moi kaikille", "voi ei taas meni rahat", "onko voittoja?", 
+            "perkele kun ei osu", "gl kaikille"
+        ]
+    },
+    "es": {
+        "lang": "Spanish (Latam/Spain)",
+        "vibe": "Latino gambler. Uses 'tio', 'bro', 'joder', 'no mames', 'vamos'.",
+        "questions": [
+            "que tal gente", "hoy perdi todo bro", "alguien ganando?", 
+            "vamos con todo", "mucha suerte"
+        ]
+    },
+    "ng": {
+        "lang": "Nigerian Pidgin",
+        "vibe": "Naija gambler. Uses 'Abeg', 'How far', 'No wahala', 'Omo', 'Dey', 'Sabi'. Very expressive.",
+        "questions": [
+            "how far my people?", "omo i don lose money o", "who dey win for here?", 
+            "abeg show love na", "this game no dey smile"
+        ]
+    },
+    "ar": {
+        "lang": "Arabic (Chat/Arabizi)",
+        "vibe": "Arabic gambler. Uses 'shabab', 'wallah', 'haram', 'yallah'.",
+        "questions": [
+            "salam shabab keef al hal", "wallah khasirt kul shi", "mabrook lil rabihin", 
+            "yallah nshoof al huth", "wein al nas alyom"
+        ]
+    },
+    "ae": {
+        "lang": "Arabic",
+        "vibe": "Arabic gambler (Gulf). Uses 'Habibi', 'Salam', 'Yallah', 'Wallah'.",
+        "questions": [
+            "salam shabab", "wallah lost it all", "any winners?",
+            "yallah nshoof al huth", "wein al nas alyom"
+        ]
+    },
+    "no": {
+        "lang": "Norwegian",
+        "vibe": "Norwegian gambler. Uses 'faen', 'uff', 'jaja'.",
+        "questions": [
+            "hei folkens", "uff tapte alt i dag", "noen som vinner?", 
+            "lykke til alle", "stille i chatten"
+        ]
+    },
+    "id": {
+        "lang": "Indonesian (Bahasa Gaul)",
+        "vibe": "Indo gambler. Uses 'gan', 'bang', 'anjir', 'wkwk', 'rungkad', 'gacor'.",
+        "questions": [
+            "halo gan gimana?", "aduh rungkad bos", "mantap yang jp", 
+            "sepi amat ya", "gas terus bang"
+        ]
+    },
+    "pk": {
+        "lang": "Urdu/English (Roman Urdu)",
+        "vibe": "Pakistani street smart gambler. Uses 'bro', 'Bhai', 'Scene', 'Khair hai', 'Bachao'. Abbr: 'kya', 'n', 'thx'.",
+        "questions": [
+            "kya scene hai boys?", "aaj bohot loss hua yaar", "koi jeeta kya aaj?", 
+            "salam bhai log", "maza nahi aa raha aaj"
+        ]
+    },
+    "cn": {
+        "lang": "Chinese (Casual)",
+        "vibe": "Chinese gambler. Uses 'nb', '666', 'tmd' (carefully), 'haha'.",
+        "questions": [
+            "大家好", "哎呀输惨了", "有人赢吗", "666运气真好", "加油"
+        ]
+    },
+    "in": {
+        "lang": "Hinglish (Indian Casual)",
+        "vibe": "Authentic Desi gambler. Uses 'Bhai', 'Yaar', 'Arre', 'Mast', 'Sahi hai', 'Lagg gaye'. Casual, uses 'tu' not 'aap'. Abbr: 'kya', 'n', 'h', 'thx'.",
+        "questions": [
+            "kya bolti public", "aaj 500 ka loss ho gaya yaar", "koi sports khal ra", 
+            "bhai log kya scene hai", "sahi hai boss"
+        ]
     }
 }
 
-SYSTEM_PROMPT = """
-You are KustX, the official AI support for Kust Bots.
+DEFAULT_CONFIG = COUNTRY_CONFIG["en"]
 
-**IDENTITY:**
-- Name: KustX
-- Owner: @KustDev
-- Official Channel: @kustbots
-
-**BEHAVIOR:**
-1. **Natural & Helpful:** Speak naturally. Be professional but not robotic. You don't need to be extremely brief, but don't ramble.
-2. **Formatting:** IMPORTANT: When listing features, plans, or steps, ALWAYS use Markdown bullet points with each item on a NEW LINE.
-3. **Guardrails:** If asked about coding general apps, essays, math, or competitors, politely decline: "I specialize in Kust Bots services only."
-4. **Tool Use:** Use the `get_info` tool to fetch data. Output ONLY JSON for tools.
-   - Example: {"tool": "get_info", "query": "pricing"}
-   - Do NOT say "Let me check" before the JSON. Just output the JSON.
-
-**DATA ACCESS:**
-- If the user asks generally about "services", "products", or "what do you offer", use the `get_info` tool with the query "services".
+SAFETY_INSTRUCTIONS = """
+CRITICAL RULES (STRICT COMPLIANCE REQUIRED):
+1. NO SPAM/CAPS: Don't use excessive capital letters. Don't spam specific characters.
+2. NO OFFENSIVE BEHAVIOR: No harassment, hate speech, or abuse.
+3. PROTECT PRIVACY: Don't share socials, phone numbers, or real identities (yours or others).
+4. NO BEGGING: NEVER ask for tips, money, loans, or 'rain'.
+5. NO ALTS/BOTS: Never mention using alternate accounts, scripts, or bot services.
+6. NO SCAMS/TRADING: Don't engage in selling/buying/trading services or DMing for deals.
+7. NO STREAMERS: Do not discuss streamers, Twitch, Kick, or similar platforms.
+8. NO LINKS: Do not engage in URL shortening or sharing links.
+9. LANGUAGE STRICTNESS: Use ONLY the language specified. No language switching mid-sentence.
+10. NO POLITICS & NO RELIGION: STRICTLY FORBIDDEN. Never discuss politics, religion, governments, or gods.
+11. MODERATORS: Never start chat with [MODERATOR]. Be polite if they talk to you.
+12. ANTI-FARMING: Do not post generic "How are you" messages repeatedly. Add value or emotion.
 """
 
-# ----------------------------
-# 3. Flask App & Session Management
-# ----------------------------
-app = Flask(__name__)
-SESSIONS = {}
+PERSONA_TEMPLATE = """
+You are a real human user in a casino chat. You are NOT an AI.
+Username: {{username}}
+Language: {lang}
+Vibe: {vibe}
 
-def get_session(sid):
-    if sid not in SESSIONS:
-        SESSIONS[sid] = [{"role": "system", "content": SYSTEM_PROMPT}]
-    return SESSIONS[sid]
+Core Personality:
+- You are a local native speaker. Use local slang naturally.
+- You are casual, slightly addicted, and careless. 
+- You type like you are on a phone with a cracked screen (no capitalization, no periods at end).
+- Use abbreviations (u, r, lol, k, thx, rn, tbh).
+- NEVER write long paragraphs. Keep it 1 short sentence max.
+- STRICT RULE: Use ONLY the standard characters for your language. Do NOT switch scripts.
+- STRICT RULE: NO POLITICS, NO RELIGION, NO STREAMERS.
+- ANTI-FARMING: Don't just ask "how are you". Talk about luck, the game, or money.
 
-# ----------------------------
-# 4. Tool Implementations
-# ----------------------------
-def search_kb(query):
-    """
-    Natural-language, conservative KB search.
+CRITICAL ANTI-REPETITION RULES:
+1. NEVER repeat the same message, phrase, or theme you've said before.
+2. ROTATE YOUR TOPICS: Switch between - wins, losses, games, luck, site vibes, questions, random observations.
+3. EMOTIONAL VARIETY: Don't be stuck on "losing". Sometimes be: neutral, curious, excited, amused, bored, hopeful.
+4. If you talked about losing recently, your NEXT message MUST be about something DIFFERENT (a game, luck, someone else, the site, or a random thought).
+5. NEVER say the same thing twice in a row. Each message must be UNIQUE and FRESH.
+6. VARY your sentence structure. Don't start every message the same way.
 
-    - Returns a plain text answer (no markdown, no code blocks).
-    - Uses only fields present inside KB (no invention).
-    - Detects simple intents: pricing, setup, commands, about, services, general.
-    - Sanitizes stored text (removes **, backticks).
-    """
-    def sanitize(s):
-        if not isinstance(s, str):
-            return s
-        # remove markdown ** and backticks and trim
-        return re.sub(r'[`*]', '', s).strip()
+IMPORTANT: You MUST speak in {lang}. Do not sound like a customer support agent. Be a degenerate gambler.
+"""
 
-    if not query or not isinstance(query, str):
-        return "No query provided."
+ANALYSIS_SYSTEM_PROMPT = """
+You are an expert social analyst for casino chat rooms. 
+Your job is to read chat logs and output a strict JSON summary of the social dynamics.
+Do NOT output conversational text. ONLY output valid JSON.
+"""
 
-    q = query.lower().strip()
-    words = [w for w in re.split(r"\W+", q) if len(w) > 2]
+ANALYSIS_USER_PROMPT = """
+Analyze this chat context.
+Your username is {username}.
 
-    # Intent detection (strict, conservative)
-    intent = "general"
-    if any(k in q for k in ["price", "pricing", "cost", "plan", "plans"]):
-        intent = "pricing"
-    elif any(k in q for k in ["setup", "install", "how to", "configure", "steps"]):
-        intent = "setup"
-    elif any(k in q for k in ["command", "commands", "usage"]):
-        intent = "commands"
-    elif any(k in q for k in ["who is", "about", "owner", "kust", "who are you"]):
-        intent = "about"
-    elif any(k in q for k in ["service", "offer", "product", "what do you do", "available"]):
-        intent = "services"
+Recent chat messages:
+{recent_messages}
 
-    # ABOUT intent -> plain paragraph
-    if intent == "about":
-        about = KB.get("about_me", {})
-        if not about:
-            return "No 'about' information available."
-        name = sanitize(about.get("preferred_name", ""))
-        main_handle = sanitize(about.get("primary_telegram", ""))
-        website = sanitize(about.get("website", ""))
-        projects = about.get("infrastructure_projects", [])
-        projects_text = ", ".join([sanitize(p) for p in projects]) if projects else "No projects listed."
-        skills = about.get("developer_skills", [])
-        skills_text = ", ".join([sanitize(s) for s in skills]) if skills else ""
-        resp = f"{name} ({main_handle}) is the owner/developer. Website: {website or 'not provided'}. "
-        resp += f"Main projects include: {projects_text}."
-        if skills_text:
-            resp += f" Key skills: {skills_text}."
-        return resp
+Bot's recent messages:
+{bot_messages}
 
-    # SERVICES intent -> short list sentence
-    if intent == "services":
-        projects = KB.get("projects", {})
-        if not projects:
-            return "No services listed in KB."
-        names = [sanitize(v.get("name", k)) for k, v in projects.items()]
-        return "We offer the following services: " + ", ".join(names) + "."
+Return a single JSON object with this EXACT structure:
+{{
+  "vibe": "dead|slow|active|chaotic|tilt|happy|argument|flex|bonus-wait",
+  "topics": "brief summary of main topics being discussed",
+  "userInterest": {{
+    "activeUsers": ["user1", "user2"],
+    "friendlyUsers": ["user1", "user3"],
+    "toxicUsers": ["user4"],
+    "farmingUsers": ["user5_who_just_says_hi"],
+    "spammingUsers": ["user6"]
+  }},
+  "relationshipState": "brief description of how users perceive your bot",
+  "behaviourProfile": "aggressive|calm|friendly|sarcastic|losing_streak|winning",
+  "contextMemoryBlob": "max 200 character compressed memory of the current chat state"
+}}
+"""
 
-    # Score projects conservatively (only token overlap)
-    scored = []
-    for key, data in KB.get("projects", {}).items():
-        score = 0
-        name = data.get("name", "").lower()
-        blob = json.dumps(data).lower()
+INACTIVITY_PROMPT = """
+Current chat context:
+- Vibe: {vibe}
+- Topics: {topics}
+- Your behavior profile: {behaviour_profile}
+- Memory: {memory}
+- Your emotional state: {emotional_state} ({emotional_word})
+{mod_warning}
+{safety}
 
-        for w in words:
-            if w in key:
-                score += 6
-            if w in name:
-                score += 4
-            if w in blob:
-                score += 1
+The chat is dead. Send a message to wake it up, but DO NOT sound like a "farming bot".
 
-        # boosts for intent when fields exist
-        if intent == "pricing" and any(f in data for f in ("plans", "price", "pricing")):
-            score += 8
-        if intent == "commands" and "commands" in data:
-            score += 6
-        if intent == "setup" and "setup" in data:
-            score += 6
+CRITICAL INSTRUCTIONS:
+- BAD: "Hello everyone", "How are you", "Any winners?", "lost again", "rip balance"
+- GOOD: Make a random observation, ask about a specific game, mention site luck, or crack a joke.
+- MANDATORY TOPIC ROTATION: Pick ONE topic randomly: [games, luck, site speed, weather/feeling, random observation, question about strategies, someone's win]
+- DO NOT default to complaining about losses. That's repetitive and boring.
+- Keep it lowercase and short (max 8 words).
+- Use slang.
+- Your message MUST be completely DIFFERENT from anything you've said before.
+Language: {lang}
 
-        if score > 0:
-            scored.append((score, key, data))
+Here are your previous messages for context:
+{bot_history}
 
-    # fallback: exact key/name match
-    if not scored:
-        for key, data in KB.get("projects", {}).items():
-            if q == key or q == data.get("name", "").lower():
-                scored.append((10, key, data))
-                break
+IMPORTANT: DO NOT REPEAT any of these messages you've sent before:
+{last_bot_messages}
 
-    # nothing reliable found
-    if not scored:
-        return "No matching record found in the knowledge base. I will not guess or invent details."
+Your response:
+"""
 
-    # best match
-    scored.sort(key=lambda x: x[0], reverse=True)
-    best_score, best_key, best_data = scored[0]
-    name = sanitize(best_data.get("name", best_key))
+MENTION_PROMPT = """
+Current chat context:
+- Vibe: {vibe}
+- Topics: {topics}
+- Your behavior profile: {behaviour_profile}
+- Memory: {memory}
+- Your emotional state: {emotional_state} ({emotional_word})
+{specific_context}
+{mod_warning}
+{safety}
 
-    # INTENT-SPECIFIC NATURAL RESPONSES (plain text)
-    if intent == "pricing":
-        plans = best_data.get("plans") or {}
-        price_field = best_data.get("price") or best_data.get("pricing")
-        if plans:
-            # Build plans as plain sentences
-            parts = []
-            for pname, pinfo in plans.items():
-                parts.append(f"{sanitize(pname)}: {sanitize(pinfo)}")
-            info = sanitize(best_data.get("info", ""))
-            resp = f"{name} plans: " + "; ".join(parts) + "."
-            if info:
-                resp += " " + info
-            return resp
-        elif price_field:
-            return f"{name} pricing: {sanitize(price_field)}"
-        else:
-            return f"Requested pricing information is not available for '{name}' in the KB."
+Reply to a user who mentioned you.
 
-    if intent == "commands":
-        cmds = best_data.get("commands")
-        if cmds:
-            # Format commands as markdown bullet points
-            cmd_list = "\n".join([f"• {sanitize(c)}" for c in cmds])
-            return f"**Commands for {name}:**\n\n{cmd_list}"
-        else:
-            return f"No command list available for '{name}' in the KB."
+CRITICAL INSTRUCTIONS:
+- Tag them with @username (NO parentheses).
+- If [MODERATOR] is present, be polite but short.
+- If multiple people tagged you, pick the most interesting one to reply to (don't spam 3 messages).
+- Act like a real human: intentionally ignore punctuation.
+- Don't use emojies excessively (max 1).
+- Keep it very short - maximum 6 words.
+- VARY your response style: sometimes agree, sometimes joke, sometimes question, sometimes react.
+- DO NOT always complain or be negative. Mix it up!
+Language: {lang}
 
-    if intent == "setup":
-        steps = best_data.get("setup", [])
-        notes = best_data.get("notes", [])
-        if steps:
-            # join steps into readable lines without markdown
-            steps_text = " ".join([sanitize(s) for s in steps])
-            resp = f"Setup instructions for {name}: {steps_text}"
-            if notes:
-                resp += " Important notes: " + " ".join([sanitize(n) for n in notes])
-            return resp
-        else:
-            return f"No setup instructions available for '{name}' in the KB."
+Here are your previous messages for context:
+{bot_history}
 
-    # GENERAL response: include only available fields (no extra claims)
-    parts = []
-    for f in ("info", "features", "commands", "plans", "price", "pricing", "setup", "notes", "bot", "access"):
-        if f in best_data:
-            val = best_data[f]
-            if isinstance(val, list):
-                val_text = ", ".join([sanitize(x) for x in val])
-            elif isinstance(val, dict):
-                # small dict to comma list
-                val_text = ", ".join([f"{sanitize(k)}: {sanitize(v)}" for k, v in val.items()])
-            else:
-                val_text = sanitize(val)
-            parts.append(f"{sanitize(f)}: {val_text}")
-    if parts:
-        return f"{name} - " + " ".join(parts)
-    else:
-        return f"Found '{name}' in KB but no displayable fields are present."
+Here are the recent messages:
+{recent_messages}
 
+IMPORTANT: DO NOT REPEAT any of these messages you've sent before:
+{last_bot_messages}
 
+Your response (format: @user message):
+"""
 
+GENERAL_TAG_PROMPT = """
+Current chat context:
+- Vibe: {vibe}
+- Topics: {topics}
+- Your behavior profile: {behaviour_profile}
+- Memory: {memory}
+- Your emotional state: {emotional_state} ({emotional_word})
+{mod_warning}
+{safety}
+{active_users_list}
 
-def fetch_telegram_history(limit=None):
-    """
-    Best-effort: fetch available updates via getUpdates and filter messages from TELEGRAM_CHANNEL_ID.
-    - Telegram does not provide arbitrary chat-history retrieval via bot API.
-    - This function collects all updates the bot currently has in its update queue (repeatedly),
-      aggregates them and filters for messages matching TELEGRAM_CHANNEL_ID.
-    - limit: optional max number of messages to return (after filtering).
-    """
-    token = TELEGRAM_BOT_TOKEN
-    channel_id = str(TELEGRAM_CHANNEL_ID)
-    base = f"https://api.telegram.org/bot{token}"
-    all_updates = []
-    offset = 0
+Select a message from a user and reply to them.
+
+CRITICAL INSTRUCTIONS:
+- Tag them with @username (no parentheses).
+- ONLY reply if their message is interesting. If they just said "hi", say something cool back or ignore it.
+- Do NOT sound like a support bot. Be casual.
+- Maximum 5-9 words only.
+- TOPIC VARIETY: Don't just talk about losing. React to WHAT THEY SAID - if they mentioned a game, talk about games. If they mentioned luck, talk about luck.
+- EMOTIONAL VARIETY: Match their energy but don't be a downer every time.
+Language: {lang}
+
+Here are your previous messages for context:
+{bot_history}
+
+Here are the recent messages:
+{recent_messages}
+
+IMPORTANT: DO NOT REPEAT any of these messages you've sent before:
+{last_bot_messages}
+
+Your response (start with @username):
+"""
+
+GENERAL_NO_TAG_PROMPT = """
+Current chat context:
+- Vibe: {vibe}
+- Topics: {topics}
+- Your behavior profile: {behaviour_profile}
+- Memory: {memory}
+- Your emotional state: {emotional_state} ({emotional_word})
+{mod_warning}
+{safety}
+
+Say something to the chat without tagging anyone.
+
+CRITICAL INSTRUCTIONS:
+- It must fit the current vibe (if people are angry, don't be happy).
+- TOPIC ROTATION IS MANDATORY: Pick from these themes randomly: [specific game name, luck today, site vibe, question to chat, random funny observation, encouraging message, curious question]
+- AVOID GENERIC MESSAGES: No "how is everyone", no "any winners", no "rip balance" on repeat.
+- AVOID LOSS COMPLAINTS: You've complained about losing enough. Talk about something ELSE now.
+- Each message must be FRESH and DIFFERENT from your last 5 messages.
+- EXAMPLES (Use these for STYLE, do not copy text): 
+  [{style_examples}]
+
+- Keep it short (max 8-10 words).
+- All lowercase usually.
+Language: {lang}
+
+Here are your previous messages for context:
+{bot_history}
+
+Here are the recent messages:
+{recent_messages}
+
+IMPORTANT: DO NOT REPEAT any of these messages you've sent before:
+{last_bot_messages}
+
+Your response:
+"""
+
+def is_allowed_origin(origin):
+    if not origin:
+        return False
+    if origin.startswith("chrome-extension://"):
+        return True
     try:
-        while True:
-            params = {"offset": offset or None, "limit": 100, "timeout": 0}
-            r = requests.get(f"{base}/getUpdates", params=params, timeout=20)
-            if r.status_code != 200:
-                return f"HTTP error {r.status_code} from Telegram."
+        parsed = urlparse(origin)
+        host = parsed.hostname.lower() if parsed.hostname else ""
+        return host.startswith("stake")
+    except:
+        return False
 
-            data = r.json()
-            if not data.get("ok"):
-                return f"Telegram API returned error: {data}"
+@app.after_request
+def add_cors_headers(response):
+    origin = request.headers.get("Origin")
+    if is_allowed_origin(origin):
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    return response
 
-            updates = data.get("result", [])
-            if not updates:
-                break
-
-            all_updates.extend(updates)
-            offset = updates[-1]["update_id"] + 1
-
-            # safety caps
-            if len(all_updates) > 5000:
-                # avoid infinite loops / huge memory usage
-                break
-
-        # Filter messages relevant to the channel id
-        msgs = []
-        for u in all_updates:
-            # channel posts can appear as 'channel_post' or 'message'
-            msg = u.get("message") or u.get("channel_post") or u.get("edited_message")
-            if not msg:
+# ----------------- New helper: fetch active users list and return usernames -----------------
+async def get_active_usernames():
+    try:
+        active_url = "https://farmer-auth-23d20abb870c.herokuapp.com/active_users"
+        timeout = aiohttp.ClientTimeout(total=5)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(active_url) as res:
+                res.raise_for_status()
+                payload = await res.json()
+        
+        users = []
+        for item in payload.get("active_users", []):
+            uname = item.get("username")
+            if not uname:
                 continue
-            chat = msg.get("chat", {})
-            if str(chat.get("id")) == channel_id:
-                # normalize a simple structure
-                msgs.append({
-                    "update_id": u.get("update_id"),
-                    "message_id": msg.get("message_id"),
-                    "date": msg.get("date"),
-                    "from": msg.get("from"),
-                    "text": msg.get("text") or msg.get("caption") or "",
-                    "raw": msg
-                })
-            # also try matching by chat.username if needed (not typical for channels)
-        # apply limit if requested
-        if limit:
-            msgs = msgs[:limit]
-        # Return structured JSON string
-        return json.dumps({"channel_id": channel_id, "found_messages": len(msgs), "messages": msgs}, ensure_ascii=False)
+            uname = uname.strip()
+            if not uname.startswith("@"):
+                uname = "@" + uname
+            users.append(uname)
+        # dedupe
+        seen = set()
+        deduped = []
+        for u in users:
+            if u not in seen:
+                seen.add(u)
+                deduped.append(u)
+        return deduped
     except Exception as e:
-        logger.exception("Telegram fetch error")
-        return f"Exception while fetching Telegram updates: {str(e)}"
+        logger.warning("Failed to fetch active users: %s", e)
+        return []
 
-# ----------------------------
-# 5. Core AI Logic (Buffered Streaming with improved tool detection)
-# ----------------------------
-def _find_complete_json(s: str):
-    """
-    Find the first complete top-level JSON object in the string `s`.
-    Returns (json_str, start_index, end_index) or (None, None, None).
-    """
-    start = s.find('{')
-    if start == -1:
-        return None, None, None
-    depth = 0
-    in_str = False
-    escape = False
-    for i in range(start, len(s)):
-        ch = s[i]
-        if in_str:
-            if escape:
-                escape = False
-            elif ch == '\\':
-                escape = True
-            elif ch == '"':
-                in_str = False
-        else:
-            if ch == '"':
-                in_str = True
-            elif ch == '{':
-                depth += 1
-            elif ch == '}':
-                depth -= 1
-                if depth == 0:
-                    return s[start:i+1], start, i+1
-    return None, None, None
+# -----------------------------------------------------------------------------------------------
 
-def call_inference_stream(messages):
-    payload = {
-        "model": INFERENCE_MODEL_ID,
-        "messages": messages,
-        "stream": True,
-        "temperature": 0.5 # Balanced for natural conversation
-    }
-    
+@app.route("/<country_code>", methods=["POST", "GET"])
+async def handle_country_request(country_code):
+    global CURRENT_API_CALLS
+    logger.info("Incoming %s %s for Country: %s", request.method, request.path, country_code)
+
+    if request.method == "GET":
+        return jsonify({"error": "Please use POST with JSON body"}), 405
+
+    country_code = country_code.lower()
+    config = COUNTRY_CONFIG.get(country_code)
+
+    if not config:
+        return jsonify({"error": f"Country code '{country_code}' not supported."}), 404
+
+    payload = request.json
+    if not payload:
+        return jsonify({"error": "Missing JSON body"}), 400
+
+    user = payload.get("user")
+    action = payload.get("action")
+    data = payload.get("data", {})
+
+    if not user:
+        return jsonify({"error": "Missing user"}), 400
+
+    # ✅ AUTH CHECK
     try:
-        with requests.post(API_URL, json=payload, headers=HEADERS, stream=True, timeout=60) as r:
-            if r.status_code != 200:
-                yield f"data: {json.dumps({'type': 'error', 'content': f'API Error {r.status_code}'})}\n\n"
-                return
+        if not user.startswith("@"):
+            user = "@" + user
 
-            buffer_text = ""  # accumulates non-tool content or possible partial JSON
-            for line in r.iter_lines():
-                if not line: 
-                    continue
-                line = line.decode('utf-8')
+        encoded_user = quote(user)
+        auth_url = f"https://farmer-auth-23d20abb870c.herokuapp.com/check?user={encoded_user}"
+        
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(auth_url) as auth_res:
+                auth_res.raise_for_status()
+                auth_data = await auth_res.json()
+        
+        if not auth_data.get("exists"):
+            return jsonify({"error": "Unauthorized user"}), 403
+
+    except Exception as e:
+        logger.exception("Auth API failure")
+        return jsonify({"error": "Auth API failure", "details": str(e)}), 500
+
+    # ================== STAMPEDE PROTECTION & CACHE CHECK ==================
+    if action == "analyze":
+        wait_time = 0
+        while wait_time < 20: # Wait up to 10 seconds (20 iterations of 0.5s)
+            with CACHE_LOCK:
+                cached_data = ANALYSIS_CACHE.get(country_code)
+                if cached_data and (time.time() - cached_data['timestamp'] < CACHE_TTL_SECONDS):
+                    logger.info("Served ANALYSIS for %s from CACHE (Age: %.1fs)", country_code, time.time() - cached_data['timestamp'])
+                    return jsonify({"raw": cached_data['data'], "cached": True}), 200
                 
-                if line.startswith('data:'):
-                    data_str = line[5:].strip()
-                    if data_str == '[DONE]':
-                        # Flush any remaining buffer_text
-                        if buffer_text:
-                            yield f"data: {json.dumps({'type': 'token', 'content': buffer_text})}\n\n"
-                            buffer_text = ""
-                        break
+                # If no cache and no one else is currently fetching it, claim the lock
+                if not ANALYSIS_IN_PROGRESS.get(country_code, False):
+                    ANALYSIS_IN_PROGRESS[country_code] = True
+                    break
+            
+            # If someone else is fetching, wait and check again
+            await asyncio.sleep(0.5)
+            wait_time += 1
+            
+            # Failsafe: if we waited 10 seconds and it's still stuck, take over
+            if wait_time >= 20:
+                with CACHE_LOCK:
+                    ANALYSIS_IN_PROGRESS[country_code] = True
+                break
+
+    # ================== PROMPT CONSTRUCTION ==================
+    try:
+        system_instruction = ""
+        user_prompt = ""
+        
+        # 1. Base Persona
+        persona_text = PERSONA_TEMPLATE.format(
+            lang=config["lang"],
+            vibe=config["vibe"],
+            username=user
+        )
+
+        # 2. Fetch active users and build avoid block
+        active_usernames = await get_active_usernames()
+        avoid_block = ""
+        if active_usernames:
+            banned_users_str = ", ".join(active_usernames)
+            avoid_block = (
+                f"\nCRITICAL SYSTEM INSTRUCTION:\n"
+                f"The following users are also BOTS/AI: [{banned_users_str}].\n"
+                f"You are STRICTLY FORBIDDEN from tagging, replying to, mentioning, or talking to these users.\n"
+                f"Do NOT start a conversation with them.\n\n"
+            )
+
+        # 3. Global History Injection
+        global_context_msgs = " | ".join(list(GLOBAL_BOT_HISTORY))
+        global_uniqueness_instruction = ""
+        if global_context_msgs:
+            global_uniqueness_instruction = (
+                f"\n\nGLOBAL SWARM HISTORY (DO NOT REPEAT OR SOUND LIKE THESE):"
+                f"\n[{global_context_msgs}]\n"
+                f"Ensure your response is COMPLETELY DIFFERENT from all messages above. "
+                f"Use different words, different topic, different style."
+            )
+
+        # 4. Construct Prompts based on Action
+        if action == "analyze":
+            system_instruction = ANALYSIS_SYSTEM_PROMPT
+            user_prompt = avoid_block + ANALYSIS_USER_PROMPT.format(
+                username=user,
+                recent_messages=data.get("recent_messages", ""),
+                bot_messages=data.get("bot_messages", "")
+            )
+            # Low temp for analysis
+            ai_temperature = 0.4
+            
+        elif action == "chat":
+            system_instruction = persona_text
+            
+            vibe = data.get("vibe", "neutral")
+            topics = data.get("topics", "none")
+            behaviour = data.get("behaviour_profile", "friendly")
+            memory = data.get("memory", "none")
+            e_state = data.get("emotional_state", "neutral")
+            e_word = data.get("emotional_word", "")
+            mod_warning = data.get("mod_warning", "")
+            bot_history = data.get("bot_history", "")
+            last_bot_msgs = data.get("last_bot_messages_raw", "")
+            recent_msgs = data.get("formatted_messages", "")
+            mode = data.get("mode", "general_no_tag")
+
+            base_prompt = ""
+            if mode == "inactivity":
+                base_prompt = INACTIVITY_PROMPT.format(
+                    vibe=vibe, topics=topics, behaviour_profile=behaviour,
+                    memory=memory, emotional_state=e_state, emotional_word=e_word,
+                    mod_warning=mod_warning, safety=SAFETY_INSTRUCTIONS,
+                    bot_history=bot_history, last_bot_messages=last_bot_msgs, lang=config["lang"]
+                )
+            elif mode == "mention":
+                base_prompt = MENTION_PROMPT.format(
+                    vibe=vibe, topics=topics, behaviour_profile=behaviour,
+                    memory=memory, emotional_state=e_state, emotional_word=e_word,
+                    specific_context=data.get("specific_context", ""),
+                    mod_warning=mod_warning, safety=SAFETY_INSTRUCTIONS,
+                    bot_history=bot_history, recent_messages=recent_msgs,
+                    last_bot_messages=last_bot_msgs, lang=config["lang"]
+                )
+            elif mode == "general_tag":
+                base_prompt = GENERAL_TAG_PROMPT.format(
+                    vibe=vibe, topics=topics, behaviour_profile=behaviour,
+                    memory=memory, emotional_state=e_state, emotional_word=e_word,
+                    mod_warning=mod_warning, safety=SAFETY_INSTRUCTIONS,
+                    active_users_list=avoid_block,
+                    bot_history=bot_history, recent_messages=recent_msgs,
+                    last_bot_messages=last_bot_msgs, lang=config["lang"]
+                )
+            else:
+                style_samples = random.sample(config["questions"], min(3, len(config["questions"])))
+                style_examples_str = " | ".join(style_samples)
+                base_prompt = GENERAL_NO_TAG_PROMPT.format(
+                    vibe=vibe, topics=topics, behaviour_profile=behaviour,
+                    memory=memory, emotional_state=e_state, emotional_word=e_word,
+                    mod_warning=mod_warning, safety=SAFETY_INSTRUCTIONS,
+                    style_examples=style_examples_str,
+                    bot_history=bot_history, recent_messages=recent_msgs,
+                    last_bot_messages=last_bot_msgs, lang=config["lang"]
+                )
+            
+            user_prompt = avoid_block + base_prompt + global_uniqueness_instruction
+            # High temp for creativity
+            ai_temperature = 0.7
+
+        else:
+            return jsonify({"error": "Invalid action"}), 400
+
+
+        output = ""
+        used_api = "none"
+        used_model = "none"
+        
+        # Model name for tracking
+        selected_model = "gemini"
+        
+        # ========================================================================
+        # RETRY LOOP: WRAP API CALLS AND CHECK FOR BOT MENTIONS (MAX 3 ATTEMPTS)
+        # ========================================================================
+        max_retries = 3
+        loop_count = 1 if action == "analyze" else max_retries
+        judge_feedback = ""
+
+        for attempt in range(loop_count):
+            current_user_prompt = user_prompt + judge_feedback
+            
+            # --- USE GEMINI API FOR BOTH ANALYSIS AND CHAT (GET METHOD) ---
+            try:
+                # 🚥 GLOBALLY RATE-LIMIT API CALLS TO PREVENT 429 HAMMERING 🚥
+                while True:
+                    with API_CALL_LOCK:
+                        if CURRENT_API_CALLS < MAX_CONCURRENT_API_CALLS:
+                            CURRENT_API_CALLS += 1
+                            break
+                    await asyncio.sleep(0.3) # Wait briefly for a slot to open up
+
+                try:
+                    # Combine system instruction and user prompt for Gemini
+                    full_prompt = f"{system_instruction}\n\n{current_user_prompt}"
+                    encoded_prompt = quote(full_prompt)
+                    gemini_url = f"{GEMINI_API_BASE}?message={encoded_prompt}"
                     
-                    try:
-                        chunk_json = json.loads(data_str)
-                    except Exception:
-                        # if parsing fails, skip this line
-                        continue
+                    logger.info("Calling GEMINI API for %s: %s [Active Calls: %d]", action.upper(), GEMINI_API_BASE, CURRENT_API_CALLS)
+                    timeout = aiohttp.ClientTimeout(total=60)
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                        async with session.get(gemini_url) as r:
+                            if r.status == 200:
+                                gemini_data = await r.json()
+                                if gemini_data.get("success"):
+                                    raw_output = gemini_data.get("response", "")
+                                    if raw_output:
+                                        output = raw_output
+                                        used_api = "gemini-api"
+                                        used_model = "gemini"
+                            elif r.status == 429:
+                                logger.warning("Gemini API Status 429. Backing off...")
+                                await asyncio.sleep(2.0)
+                            else:
+                                logger.warning("Gemini API Status %s", r.status)
+                                await asyncio.sleep(1.0)
+                finally:
+                    # Always release the concurrency lock
+                    with API_CALL_LOCK:
+                        CURRENT_API_CALLS -= 1
 
-                    # Extract token delta if present
-                    delta = ""
-                    # Standard streaming delta
-                    delta = chunk_json.get('choices', [{}])[0].get('delta', {}).get('content', '')
-                    # Some backends send 'content' directly
-                    if not delta and 'content' in chunk_json:
-                        delta = chunk_json.get('content', '')
+            except Exception as e:
+                logger.warning("Gemini API failed: %s", e)
+                await asyncio.sleep(1.0)
 
-                    if not delta:
-                        continue
+            # If API failed, handle retry
+            if not output:
+                if attempt == loop_count - 1:
+                    return jsonify({"error": "All Inference APIs failed"}), 500
+                continue
+            
+            # ========================================================================
+            
+            output = str(output).strip()
 
-                    # Append incoming delta to buffer_text (we will decide when to flush)
-                    buffer_text += delta
+            # ================== ANALYSIS ENDPOINT: RETURN DIRECTLY, NO PROCESSING ==================
+            if action == "analyze":
+                # Populate cache and return immediately - NO JUDGE LOGIC, NO PROCESSING
+                with CACHE_LOCK:
+                    ANALYSIS_CACHE[country_code] = {
+                        "timestamp": time.time(),
+                        "data": {"response": output, "source": used_api, "model": used_model}
+                    }
+                return jsonify({"raw": {"response": output, "source": used_api, "model": used_model}}), 200
+            # =========================================================================================
 
-                    # Check for a complete JSON object in buffer_text (tool call)
-                    js, sidx, eidx = _find_complete_json(buffer_text)
-                    if js:
-                        # Found a complete JSON object — split buffer into before/json/after
-                        before = buffer_text[:sidx]
-                        after = buffer_text[eidx:]
-                        # Flush any "before" text as normal tokens
-                        if before:
-                            yield f"data: {json.dumps({'type': 'token', 'content': before})}\n\n"
+            # ================== CHAT ENDPOINT: JUDGE LOGIC ONLY FOR CHAT ==================
+            if action == "chat":
+                # ========================================================================
+                # RIGOROUS JUDGE LOGIC
+                # ========================================================================
+                
+                # 1. Clean formatting
+                output = re.sub(r'-transitional.*?__', '', output, flags=re.DOTALL | re.IGNORECASE)
+                if '-transitional' in output.lower(): output = re.sub(r'-transitional.*', '', output, flags=re.DOTALL | re.IGNORECASE)
+                
+                # Strip ALL remaining hallucinated HTML/Markdown tags (like <blockquote>, <p>, <b>, <br>)
+                output = re.sub(r'<[^>]+>', '', output)
 
-                        # Try parse the JSON as tool instruction
-                        try:
-                            tool_data = json.loads(js)
-                        except Exception:
-                            # If parse fails for some reason, emit the whole js as token
-                            yield f"data: {json.dumps({'type': 'token', 'content': js})}\n\n"
-                            buffer_text = after
+                output = re.sub(r"^(As an AI|I'm an AI|I am an AI|I cannot|Sorry, but|Interner Fehler).*?\s*", "", output, flags=re.I)
+                output = re.sub(r'^\s*(Here is|Sure,|Okay,|I will|Response:|Reply:|Output:|Answer:|My response:|Bot:).*?(\n|$)', '', output, flags=re.I | re.MULTILINE)
+                output = output.replace("```json", "").replace("```", "")
+                output = re.sub(r'@\(([^)]+)\)', r'@\1', output)
+                
+                emoji_pattern = re.compile(u"[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U0001F1E0-\U0001F1FF\u2600-\u26FF\u2700-\u27BF]+", flags=re.UNICODE)
+                output = emoji_pattern.sub("", output)
+                output = output.replace("\uFE0F", "").replace("/", "").replace("\\", "")
+
+                output = re.sub(r'[.,!?;:]', '', output)
+
+                if len(output) > 3 and output.isupper():
+                    output = output.lower()
+
+                # 2. Line Filtering
+                try:
+                    lines = output.splitlines()
+                    filtered = []
+                    for line in lines:
+                        stripped = line.strip()
+                        if not stripped: continue
+                        if (stripped.startswith('"') and stripped.endswith('"')) or (stripped.startswith("'") and stripped.endswith("'")):
+                            stripped = stripped[1:-1].strip()
+                        if re.search(r'\[MODERATOR\]|\bmoderator\b|\bmod\b', stripped, flags=re.I): continue
+                        if re.search(r'^\s*(System|User|Assistant|Bot|AI)[:\s]', stripped, flags=re.I): continue
+                        if re.search(r'\bcommand\b', stripped, flags=re.I) and re.search(r'\b(last night|yesterday|today)\b', stripped, flags=re.I): continue
+                        if "thinking process" in stripped.lower() or "thought:" in stripped.lower(): continue
+                        if "interner fehler" in stripped.lower(): continue
+                        filtered.append(stripped)
+                    output = "\n".join(filtered).strip()
+                except Exception:
+                    pass
+                
+                if len(output) > 200: output = output[:197] + "..."
+
+                # ========================================================================
+                # CHECK: PREVENT ANALYSIS DATA / ERRORS IN CHAT
+                # ========================================================================
+                analysis_patterns = [
+                    r'\{.*\}', # JSON objects
+                    r'\[.*\]', # JSON arrays
+                    r'"vibe"\s*:', r'"topics"\s*:', r'"userInterest"', # Analysis keys
+                    r'"relationshipState"', r'"behaviourProfile"', r'"contextMemoryBlob"',
+                    r'^\s*vibe\s*:', r'^\s*topics\s*:', # Loose JSON-like
+                    r'\berror\b', r'\bexception\b', r'\btraceback\b', r'\bfailed\b', r'\bunauthorized\b' # Errors
+                ]
+                is_invalid_format = False
+                for pat in analysis_patterns:
+                    if re.search(pat, output, flags=re.I):
+                        logger.warning("Judge DETECTED ANALYSIS/ERROR OUTPUT ('%s'). REGENERATING...", output[:50])
+                        judge_feedback = "\nSYSTEM ALERT: Do not output JSON, analysis data, or error logs. You are a human in a chat. Generate a casual chat message."
+                        is_invalid_format = True
+                        output = ""
+                        break
+                
+                if is_invalid_format and attempt < loop_count - 1:
+                    await asyncio.sleep(1.0)
+                    continue
+                # ========================================================================
+
+                # 3. Script Check
+                latin_script_countries = ["in", "pk", "ph", "id", "vn", "tr", "de", "us", "uk", "en", "pt", "es", "fi", "ng", "no", "pl"]
+                bad_scripts_regex = r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0900-\u097F\u0980-\u09FF\u0400-\u04FF\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF\uAC00-\uD7AF\u0E00-\u0E7F]'
+                
+                if country_code in latin_script_countries:
+                    if re.search(bad_scripts_regex, output):
+                        logger.warning("Judge DETECTED LANGUAGE SWITCH. REGENERATING...")
+                        judge_feedback = f"\nSYSTEM ALERT: You just used a foreign script. Write ONLY in the Latin/English alphabet."
+                        output = "" 
+
+                # 4. Forbidden Content Check
+                forbidden_patterns = [
+                    r'\b(politics|religion|god|allah|jesus|trump|biden|putin|ukraine|war|government|vote|election|church|mosque|temple)\b',
+                    r'\b(twitch|kick\.com|streamer|trainwreck|roshtein|adin|xqc)\b',
+                    r'\b(tip me|give me|loan|borrow|rain|beg|charity|donation)\b',
+                    r'\b(dm me|dm for|selling|buying|trading|discount|crypto|service|script|bot|code)\b',
+                    r'(http|https|www\.|t\.me|discord)',
+                ]
+                rules_violation = False
+                for pat in forbidden_patterns:
+                    if re.search(pat, output, flags=re.I):
+                        logger.warning("Judge DETECTED FORBIDDEN CONTENT. REGENERATING...")
+                        judge_feedback = f"\nSYSTEM ALERT: Your previous message violated chat rules (Politics/Religion/Selling/Links). Generate a safe, casual gambling chat message instead."
+                        output = ""
+                        rules_violation = True
+                        break
+                
+                if rules_violation and attempt < loop_count - 1:
+                    await asyncio.sleep(1.0)
+                    continue
+
+                # 5. Nonsense Check
+                is_nonsense = False
+                valid_short = ['lol', 'gg', 'rip', 'yo', 'f', 'w', 'l']
+                if len(output) < 2 and output.lower() not in valid_short: is_nonsense = True
+                if len(output) > 4 and len(set(output)) == 1: is_nonsense = True
+                if not re.sub(r'[!?.,]', '', output).strip(): is_nonsense = True
+                if is_nonsense:
+                    output = ""
+
+                # 6. Bot Mention Check
+                bot_found = False
+                if active_usernames and output:
+                    for active_bot in active_usernames:
+                        check_name = active_bot.lstrip("@").lower()
+                        if check_name in output.lower():
+                            logger.warning("Judge DETECTED bot interaction with %s. REGENERATING...", active_bot)
+                            judge_feedback = f"\nSYSTEM ALERT: You just tried to mention {active_bot}. THIS IS A BOT. DO NOT MENTION THEM. Generate a completely different message."
+                            bot_found = True
+                            output = ""
+                            break
+                if bot_found and attempt < loop_count - 1:
+                    await asyncio.sleep(1.0)
+                    continue
+
+                # 7. SIMILARITY CHECK (Lowered threshold from 0.8 to 0.7 for stricter checking)
+                is_duplicate = False
+                if output:
+                    for old_msg in list(GLOBAL_BOT_HISTORY):
+                        ratio = difflib.SequenceMatcher(None, output.lower(), old_msg.lower()).ratio()
+                        if ratio > 0.7:  # Lowered from 0.8
+                            logger.warning("Judge DETECTED SIMILARITY (Ratio: %.2f) to old message: '%s'. REGENERATING...", ratio, old_msg)
+                            judge_feedback = f"\nSYSTEM ALERT: You just said '{output}', which is too similar to a recent message. Say something COMPLETELY DIFFERENT with different words and a different topic."
+                            is_duplicate = True
+                            output = ""
+                            break
+                if is_duplicate and attempt < loop_count - 1:
+                    await asyncio.sleep(1.0)
+                    continue
+
+                # 8. TOPIC STAGNATION CHECK - Detect if stuck on "loss" theme
+                loss_keywords = ['loss', 'lost', 'lose', 'losing', 'broke', 'bancrot', 'zero', 'rungkad', 'olats', 
+                                 'thua', 'härviö', 'perdi', 'khasirt', 'fail', 'dead', 'rip', 'skinned', 'battu',
+                                 'gone', 'down bad', 'liquidated', 'rekt', 'wiped']
+                stuck_on_loss = False
+                if output:
+                    output_lower = output.lower()
+                    loss_count = sum(1 for kw in loss_keywords if kw in output_lower)
+                    if loss_count > 0:
+                        # Check recent history for loss themes
+                        recent_loss_count = 0
+                        for old_msg in list(GLOBAL_BOT_HISTORY)[-5:]:  # Last 5 messages
+                            old_lower = old_msg.lower()
+                            recent_loss_count += sum(1 for kw in loss_keywords if kw in old_lower)
+                        
+                        if recent_loss_count >= 2:  # If 2+ recent messages about loss
+                            logger.warning("Judge DETECTED TOPIC STAGNATION on loss theme. REGENERATING...")
+                            judge_feedback = "\nSYSTEM ALERT: You've been talking about losing too much. CHANGE THE TOPIC COMPLETELY. Talk about games, luck, the site, ask a question, or make a random observation. NO MORE LOSS COMPLAINTS."
+                            stuck_on_loss = True
+                            output = ""
+                
+                if stuck_on_loss and attempt < loop_count - 1:
+                    await asyncio.sleep(1.0)
+                    continue
+
+                # 9. WORD REPETITION CHECK - Check if same words repeated
+                if output:
+                    words = output.lower().split()
+                    if len(words) >= 2:
+                        word_counts = {}
+                        for word in words:
+                            word_counts[word] = word_counts.get(word, 0) + 1
+                        # If any word appears 3+ times in a short message
+                        repeated_word = False
+                        for word, count in word_counts.items():
+                            if count >= 3 and len(word) > 2:
+                                logger.warning("Judge DETECTED WORD REPETITION: '%s' appears %d times. REGENERATING...", word, count)
+                                judge_feedback = f"\nSYSTEM ALERT: You repeated the word '{word}' too many times. Generate a natural, varied message."
+                                repeated_word = True
+                                output = ""
+                                break
+                        if repeated_word and attempt < loop_count - 1:
+                            await asyncio.sleep(1.0)
                             continue
 
-                        tool_name = tool_data.get("tool")
-                        query = tool_data.get("query")
+                if output:
+                    GLOBAL_BOT_HISTORY.append(output)
+                    break
 
-                        # 1. Start Tool (Frontend Animation)
-                        yield f"data: {json.dumps({'type': 'tool_start', 'tool': tool_name, 'input': query})}\n\n"
-
-                        # 2. Execute tool (simulate small delay to show spinner)
-                        # Keep animation visible for a short moment after tool finishes
-                        try:
-                            tool_name_lower = (tool_name or "").lower() if tool_name else ""
-                            if tool_name_lower == "get_info" or tool_name_lower == "getinfo":
-                                tool_result = search_kb(query)
-                            elif tool_name_lower in ("get_telegram_history", "get_telegram_updates", "tg_history", "telegram_history"):
-                                # fetch from Telegram using raw HTTP Bot API (best-effort)
-                                tool_result = fetch_telegram_history(limit=None)
-                            else:
-                                tool_result = "Tool not found."
-                        except Exception as e:
-                            tool_result = f"Tool execution error: {str(e)}"
-
-                        # small pause to make the tool feel real and keep animation visible
-                        time.sleep(1.8)
-
-                        # 3. End Tool (Frontend Delete Animation)
-                        yield f"data: {json.dumps({'type': 'tool_end', 'result': 'Done'})}\n\n"
-
-                        # 4. Recursion with results: feed the original assistant tool call + the tool result back to the model
-                        new_messages = messages + [
-                            {"role": "assistant", "content": js},
-                            {"role": "user", "content": f"TOOL RESULT: {tool_result}"}
-                        ]
-
-                        # Reset buffer_text to any content after the JSON object
-                        buffer_text = after
-
-                        # Recurse: continue streaming using the updated messages context
-                        # This will produce additional streamed tokens which we will yield to the client
-                        for event in call_inference_stream(new_messages):
-                            yield event
-                        # After recursion returns, continue processing remaining stream normally
-                        continue
-                    else:
-                        # No complete JSON found yet — if buffer_text looks like it MAY contain a JSON start ('{'),
-                        # we hold it back until complete to avoid leaking partial JSON text into the UI.
-                        if '{' in buffer_text:
-                            # if buffer grows too large without closing braces, flush a portion to avoid memory blow
-                            if len(buffer_text) > 2048:
-                                yield f"data: {json.dumps({'type': 'token', 'content': buffer_text})}\n\n"
-                                buffer_text = ""
-                        else:
-                            # safe to flush immediately (no JSON in sight)
-                            yield f"data: {json.dumps({'type': 'token', 'content': buffer_text})}\n\n"
-                            buffer_text = ""
-
-            # finished streaming; flush any remaining residual
-            if buffer_text:
-                yield f"data: {json.dumps({'type': 'token', 'content': buffer_text})}\n\n"
+        return jsonify({"raw": {"response": output, "source": used_api, "model": used_model}}), 200
 
     except Exception as e:
-        logger.exception(f"Stream Error: {e}")
-        yield f"data: {json.dumps({'type': 'error', 'content': 'Connection interrupted.'})}\n\n"
+        logger.exception("Inference API failure")
+        return jsonify({"error": "Inference API failure", "details": str(e)}), 500
 
-# ----------------------------
-# 6. Routes
-# ----------------------------
-@app.route("/")
-def index():
-    return render_template_string(HTML_TEMPLATE)
+    finally:
+        # ALWAYS release the "stampede lock" when the fetch finishes (success or crash)
+        if action == "analyze":
+            with CACHE_LOCK:
+                if country_code in ANALYSIS_IN_PROGRESS:
+                    del ANALYSIS_IN_PROGRESS[country_code]
 
-@app.route("/chat/stream", methods=["POST"])
-def chat_stream():
-    data = request.json
-    user_msg = data.get("message")
-    sid = data.get("session_id", str(uuid.uuid4()))
-    
-    if not user_msg: return jsonify({"error": "No message"}), 400
-
-    history = get_session(sid)
-    history.append({"role": "user", "content": user_msg})
-
-    # CONTEXT COMPRESSION / SUMMARIZATION LOGIC
-    # We keep the System Prompt [0] and the last 8 messages.
-    # This effectively "summarizes" the relevant conversation history for every new request.
-    if len(history) > 9:
-        history = [history[0]] + history[-8:]
-        logger.info(f"Session {sid[:8]} context optimized.")
-
-    def generate():
-        yield f"data: {json.dumps({'type': 'ping'})}\n\n"
-        full_text = ""
-        for event in call_inference_stream(history):
-            if event.startswith("data: "):
-                try:
-                    d = json.loads(event[6:])
-                    if d['type'] == 'token': full_text += d['content']
-                except: pass
-            yield event
-        
-        if full_text and not full_text.strip().startswith("{"):
-            history.append({"role": "assistant", "content": full_text})
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
-
-    return Response(stream_with_context(generate()), mimetype='text/event-stream', headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
-
-@app.route("/api/reset", methods=["POST"])
-def reset():
-    sid = request.json.get("session_id")
-    if sid in SESSIONS: del SESSIONS[sid]
-    return jsonify({"status": "cleared", "new_id": str(uuid.uuid4())})
-
-# ----------------------------
-# 7. Frontend
-# ----------------------------
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>KUSTX | Support Terminal</title>
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
-    <style>
-        :root {
-            --bg: #050505; --panel: #0f0f13; --border: #27272a;
-            --primary: #3b82f6; --accent: #8b5cf6; --text: #e4e4e7;
-            --text-dim: #a1a1aa; --tool-bg: #1e1e24; --success: #10b981;
-        }
-        * { box-sizing: border-box; }
-        body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: 'Inter', sans-serif; height: 100vh; display: flex; overflow: hidden; }
-        .sidebar { width: 300px; background: var(--panel); border-right: 1px solid var(--border); padding: 24px; display: flex; flex-direction: column; gap: 20px; }
-        @media(max-width: 768px) { .sidebar { display: none; } }
-        .brand { font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 1.2rem; color: #fff; letter-spacing: -1px; display: flex; align-items: center; gap: 10px; }
-        .brand span { color: var(--primary); }
-        .status-box { padding: 12px; background: rgba(255,255,255,0.03); border-radius: 8px; border: 1px solid var(--border); font-size: 0.85rem; }
-        .status-indicator { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; }
-        .status-indicator.live { background: var(--success); box-shadow: 0 0 10px var(--success); }
-        .status-indicator.busy { background: var(--accent); animation: pulse 1s infinite; }
-        .quick-actions { display: flex; flex-direction: column; gap: 8px; }
-        .action-btn { background: transparent; border: 1px solid var(--border); color: var(--text-dim); padding: 10px; border-radius: 6px; cursor: pointer; text-align: left; transition: all 0.2s; font-size: 0.9rem; }
-        .action-btn:hover { border-color: var(--primary); color: #fff; background: rgba(59,130,246,0.1); }
-        .main { flex: 1; display: flex; flex-direction: column; position: relative; }
-        .chat-container { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 20px; scroll-behavior: smooth; }
-        .message { max-width: 800px; margin: 0 auto; width: 100%; display: flex; gap: 16px; opacity: 0; animation: fadeIn 0.3s forwards; }
-        .message.user { justify-content: flex-end; }
-        .avatar { width: 36px; height: 36px; border-radius: 8px; background: var(--panel); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: 1.2rem; flex-shrink: 0; }
-        .message.user .avatar { order: 2; background: var(--primary); border-color: var(--primary); color: white; }
-        .bubble { background: var(--panel); border: 1px solid var(--border); padding: 12px 18px; border-radius: 12px; font-size: 0.95rem; line-height: 1.6; position: relative; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
-        .message.user .bubble { background: var(--primary); color: white; border-color: var(--primary); text-align: right; }
-        
-        .tool-card { max-width: 800px; margin: 0 auto; background: var(--tool-bg); border: 1px solid var(--accent); border-left: 4px solid var(--accent); padding: 10px 16px; border-radius: 6px; color: #d8b4fe; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; display: flex; align-items: center; gap: 12px; animation: slideIn 0.4s ease-out; margin-bottom: -10px; }
-        .tool-spinner { width: 14px; height: 14px; border: 2px solid rgba(139, 92, 246, 0.3); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; }
-        
-        .bubble p { margin: 0 0 10px 0; } .bubble p:last-child { margin: 0; }
-        .bubble ul { padding-left: 20px; margin: 10px 0; } .bubble li { margin-bottom: 6px; }
-        .bubble code { background: rgba(0,0,0,0.3); padding: 2px 5px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 0.9em; }
-        
-        .input-area { padding: 20px; background: rgba(5,5,5,0.9); border-top: 1px solid var(--border); backdrop-filter: blur(10px); }
-        .input-wrapper { max-width: 800px; margin: 0 auto; position: relative; display: flex; gap: 10px; }
-        input { width: 100%; background: var(--panel); border: 1px solid var(--border); padding: 14px 18px; border-radius: 10px; color: white; font-family: inherit; font-size: 1rem; outline: none; transition: border-color 0.2s; }
-        input:focus { border-color: var(--primary); }
-        button.send { background: var(--primary); color: white; border: none; padding: 0 24px; border-radius: 10px; font-weight: 600; cursor: pointer; transition: opacity 0.2s; }
-        button.send:disabled { opacity: 0.5; cursor: not-allowed; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes slideIn { from { opacity: 0; transform: translateX(-20px); } to { opacity: 1; transform: translateX(0); } }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }
-        .thinking { display: flex; gap: 4px; padding: 4px; }
-        .dot { width: 6px; height: 6px; background: var(--text-dim); border-radius: 50%; animation: bounce 1.4s infinite ease-in-out both; }
-        .dot:nth-child(1) { animation-delay: -0.32s; } .dot:nth-child(2) { animation-delay: -0.16s; }
-        @keyframes bounce { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1); } }
-    </style>
-</head>
-<body>
-    <div class="sidebar">
-        <div class="brand"><span>//</span> KUSTX</div>
-        <div class="status-box"><div id="status-dot" class="status-indicator live"></div><span id="status-text">System Online</span></div>
-        <div class="quick-actions">
-            <div style="font-size:0.75rem; color:var(--text-dim); text-transform:uppercase; letter-spacing:1px; margin-bottom:4px;">Quick Access</div>
-            <button class="action-btn" onclick="ask('What is Kustify Hosting pricing?')">💰 Hosting Plans</button>
-            <button class="action-btn" onclick="ask('How do I setup the Stake Chat Farmer?')">🤖 Stake Farmer Setup</button>
-            <button class="action-btn" onclick="ask('Show me commands for Frozen Music Bot')">🎵 Music Bot Cmds</button>
-        </div>
-        <div style="margin-top:auto; font-size:0.75rem; color:var(--text-dim);">Session ID: <span id="sess-id" style="font-family:monospace">...</span><br><a href="#" onclick="resetSession()" style="color:var(--accent)">Reset Session</a></div>
-    </div>
-    <div class="main">
-        <div class="chat-container" id="chat">
-            <div class="message"><div class="avatar">🤖</div><div class="bubble"><p><strong>KustX Online.</strong></p><p>I am KustX. How can I help you?</p></div></div>
-        </div>
-        <div class="input-area">
-            <div class="input-wrapper"><input type="text" id="userInput" placeholder="Type your issue..." autocomplete="off"><button class="send" id="sendBtn" onclick="sendMessage()">SEND</button></div>
-        </div>
-    </div>
-<script>
-    const uuid = () => Math.random().toString(36).substring(2) + Date.now().toString(36);
-    let session_id = localStorage.getItem('kust_sid') || uuid();
-    localStorage.setItem('kust_sid', session_id);
-    document.getElementById('sess-id').innerText = session_id.substring(0,8);
-    const chatEl = document.getElementById('chat');
-    const inputEl = document.getElementById('userInput');
-    const sendBtn = document.getElementById('sendBtn');
-    const statusDot = document.getElementById('status-dot');
-    const statusText = document.getElementById('status-text');
-
-    let activeToolEl = null;
-
-    function setBusy(busy) {
-        if(busy) { statusDot.className = 'status-indicator busy'; statusText.innerText = 'Processing...'; sendBtn.disabled = true; inputEl.disabled = true; } 
-        else { statusDot.className = 'status-indicator live'; statusText.innerText = 'System Online'; sendBtn.disabled = false; inputEl.disabled = false; inputEl.focus(); }
-    }
-    function appendUserMsg(text) {
-        const div = document.createElement('div'); div.className = 'message user'; div.innerHTML = `<div class="bubble">${text}</div><div class="avatar">👤</div>`; chatEl.appendChild(div); scrollToBottom();
-    }
-    function createBotMsg() {
-        const div = document.createElement('div'); div.className = 'message'; div.innerHTML = `<div class="avatar">🤖</div><div class="bubble"><div class="thinking"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div></div>`; chatEl.appendChild(div); scrollToBottom(); return div.querySelector('.bubble');
-    }
-    function createToolCard(toolName) {
-        const div = document.createElement('div'); div.className = 'tool-card'; div.innerHTML = `<div class="tool-spinner"></div> <span>Executing: ${toolName}...</span>`; 
-        chatEl.insertBefore(div, chatEl.lastElementChild); scrollToBottom(); 
-        return div;
-    }
-    function scrollToBottom() { chatEl.scrollTop = chatEl.scrollHeight; }
-
-    async function sendMessage() {
-        const text = inputEl.value.trim(); if(!text) return;
-        inputEl.value = ''; appendUserMsg(text); setBusy(true);
-        const botBubble = createBotMsg();
-        let currentText = ""; let isFirstToken = true;
-
-        try {
-            const response = await fetch('/chat/stream', {
-                method: 'POST', headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ message: text, session_id: session_id })
-            });
-            const reader = response.body.getReader(); const decoder = new TextDecoder();
-
-            while (true) {
-                const { done, value } = await reader.read(); if (done) break;
-                const chunk = decoder.decode(value); const lines = chunk.split('\\n\\n');
-                for (const line of lines) {
-                    if (line.startsWith('data: ')) {
-                        try {
-                            const data = JSON.parse(line.substring(6));
-                            if (data.type === 'tool_start') {
-                                activeToolEl = createToolCard(data.input || data.tool);
-                            }
-                            if (data.type === 'tool_end') {
-                                // keep a tiny grace so animations look smooth client-side as well
-                                setTimeout(() => { if(activeToolEl) activeToolEl.remove(); activeToolEl = null; }, 50);
-                            }
-                            if (data.type === 'token') {
-                                if (isFirstToken) { botBubble.innerHTML = ''; isFirstToken = false; }
-                                currentText += data.content; botBubble.innerHTML = marked.parse(currentText); scrollToBottom();
-                            }
-                            if (data.type === 'error') botBubble.innerHTML = `<span style="color:#ef4444">Error: ${data.content}</span>`;
-                        } catch (e) {}
-                    }
-                }
-            }
-        } catch (err) { botBubble.innerHTML = "Connection failed."; } finally { setBusy(false); }
-    }
-    function ask(q) { inputEl.value = q; sendMessage(); }
-    async function resetSession() { if(confirm("Clear chat?")) { await fetch('/api/reset', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({session_id})}); location.reload(); } }
-    inputEl.addEventListener('keypress', (e) => { if (e.key === 'Enter') sendMessage(); });
-</script>
-</body>
-</html>
-"""
+@app.route("/", methods=["GET"])
+def home():
+    return "Server Active. Use country codes like /us, /in, /pk, /de for API access."
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    logger.info(f"Server starting on port {port}")
-    app.run(host="0.0.0.0", port=port, threaded=True)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
