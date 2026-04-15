@@ -36,6 +36,12 @@ ANALYSIS_IN_PROGRESS = {}
 CACHE_TTL_SECONDS = 600
 CACHE_LOCK = threading.Lock()
 
+# Summary Cache (15 minutes)
+SUMMARY_CACHE = {}
+SUMMARY_IN_PROGRESS = {}
+SUMMARY_CACHE_TTL_SECONDS = 900
+SUMMARY_LOCK = threading.Lock()
+
 # Concurrency Control to prevent 429s (Max simultaneous API calls)
 MAX_CONCURRENT_API_CALLS = 3
 CURRENT_API_CALLS = 0
@@ -306,6 +312,88 @@ Return a single JSON object with this EXACT structure:
 }}
 """
 
+# ================== NEW: SUMMARY SYSTEM PROMPT (SERVER-SIDE) ==================
+SUMMARY_SYSTEM_PROMPT = """
+You are an expert chat analyst and summarizer. Your job is to analyze chat logs from a casino chat room and create comprehensive summaries.
+
+You must identify:
+1. Key topics and themes discussed
+2. Important users and their behavior patterns
+3. Hard/negative comments, conflicts, or toxic interactions
+4. Overall sentiment and mood
+5. Warnings or red flags that the bot owner should be aware of
+6. Recommendations for how the bot should interact going forward
+
+Your summaries should be:
+- Concise but comprehensive
+- Focused on actionable insights
+- Alert to any problematic users or situations
+- Helpful for understanding the chat dynamics
+
+OUTPUT FORMAT: Return ONLY valid JSON with the structure specified in the user prompt.
+Do NOT output any conversational text before or after the JSON.
+"""
+
+SUMMARY_USER_PROMPT = """
+Analyze and summarize this chat session data.
+
+USERNAME: {username}
+SESSION DURATION: {session_duration} seconds
+TOTAL MESSAGES ANALYZED: {total_messages}
+BOT MESSAGES SENT: {total_bot_messages}
+CURRENT VIBE: {vibe}
+CURRENT TOPICS: {topics}
+BEHAVIOR PROFILE: {behaviour_profile}
+
+CHAT MESSAGES:
+{formatted_messages}
+
+BOT'S MESSAGES:
+{bot_history}
+
+PREVIOUS SUMMARY (if any):
+{previous_summary}
+
+Analyze all the above and return a JSON object with this EXACT structure:
+{{
+  "summary": "A 2-3 sentence overall summary of the chat session",
+  "important_points": [
+    "Key point 1 about the chat",
+    "Key point 2 about the chat"
+  ],
+  "hard_comments": [
+    "Any negative/toxic comment directed at the bot or others",
+    "Conflicts or arguments that occurred"
+  ],
+  "active_users": [
+    "List of users who were most active and engaging"
+  ],
+  "toxic_users": [
+    "List of users who showed toxic/problematic behavior"
+  ],
+  "sentiment": "overall sentiment: very_negative|negative|neutral|positive|very_positive",
+  "topics": [
+    "Main topic 1 discussed",
+    "Main topic 2 discussed"
+  ],
+  "warnings": [
+    "Any warnings about specific users or situations the bot owner should know"
+  ],
+  "recommendations": [
+    "Suggestions for how the bot should interact in this chat going forward"
+  ]
+}}
+
+CRITICAL INSTRUCTIONS:
+1. If there are NO hard comments, use an empty array: []
+2. If there are NO toxic users, use an empty array: []
+3. If there are NO warnings, use an empty array: []
+4. Be thorough - analyze ALL messages provided
+5. Focus on identifying patterns and important interactions
+6. The summary should be useful for understanding what happened in the chat
+"""
+# ================================================================================
+
 INACTIVITY_PROMPT = """
 Current chat context:
 - Vibe: {vibe}
@@ -569,6 +657,29 @@ async def handle_country_request(country_code):
                     ANALYSIS_IN_PROGRESS[country_code] = True
                 break
 
+    # ================== NEW: SUMMARY CACHE CHECK ==================
+    if action == "summarize":
+        wait_time = 0
+        while wait_time < 20:
+            with SUMMARY_LOCK:
+                cached_summary = SUMMARY_CACHE.get(user)
+                if cached_summary and (time.time() - cached_summary['timestamp'] < SUMMARY_CACHE_TTL_SECONDS):
+                    logger.info("Served SUMMARY for %s from CACHE (Age: %.1fs)", user, time.time() - cached_summary['timestamp'])
+                    return jsonify({"raw": cached_summary['data'], "cached": True}), 200
+                
+                if not SUMMARY_IN_PROGRESS.get(user, False):
+                    SUMMARY_IN_PROGRESS[user] = True
+                    break
+            
+            await asyncio.sleep(0.5)
+            wait_time += 1
+            
+            if wait_time >= 20:
+                with SUMMARY_LOCK:
+                    SUMMARY_IN_PROGRESS[user] = True
+                break
+    # ==============================================================
+
     # ================== PROMPT CONSTRUCTION ==================
     try:
         system_instruction = ""
@@ -614,6 +725,25 @@ async def handle_country_request(country_code):
             )
             # Low temp for analysis
             ai_temperature = 0.4
+
+        # ================== NEW: SUMMARIZE ACTION ==================
+        elif action == "summarize":
+            system_instruction = SUMMARY_SYSTEM_PROMPT
+            user_prompt = SUMMARY_USER_PROMPT.format(
+                username=user,
+                session_duration=data.get("session_duration", 0),
+                total_messages=data.get("total_messages", 0),
+                total_bot_messages=data.get("total_bot_messages", 0),
+                vibe=data.get("vibe", "unknown"),
+                topics=data.get("topics", "none"),
+                behaviour_profile=data.get("behaviour_profile", "friendly"),
+                formatted_messages=data.get("formatted_messages", ""),
+                bot_history=data.get("bot_history", ""),
+                previous_summary=data.get("previous_summary", "None")
+            )
+            # Low temp for summary (more analytical)
+            ai_temperature = 0.3
+        # ==============================================================
             
         elif action == "chat":
             system_instruction = persona_text
@@ -687,7 +817,7 @@ async def handle_country_request(country_code):
         # RETRY LOOP: WRAP API CALLS AND CHECK FOR BOT MENTIONS (MAX 3 ATTEMPTS)
         # ========================================================================
         max_retries = 3
-        loop_count = 1 if action == "analyze" else max_retries
+        loop_count = 1 if action in ["analyze", "summarize"] else max_retries
         judge_feedback = ""
 
         for attempt in range(loop_count):
@@ -756,6 +886,40 @@ async def handle_country_request(country_code):
                     }
                 return jsonify({"raw": {"response": output, "source": used_api, "model": used_model}}), 200
             # =========================================================================================
+
+            # ================== NEW: SUMMARIZE ENDPOINT: PROCESS AND RETURN ==================
+            if action == "summarize":
+                # Clean up the output - remove markdown code blocks if present
+                cleaned_output = output
+                cleaned_output = re.sub(r'```json\s*', '', cleaned_output)
+                cleaned_output = re.sub(r'```\s*', '', cleaned_output)
+                cleaned_output = cleaned_output.strip()
+                
+                # Try to extract JSON if there's extra text
+                try:
+                    # Find JSON object in the output
+                    first_brace = cleaned_output.find('{')
+                    last_brace = cleaned_output.rfind('}')
+                    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+                        cleaned_output = cleaned_output[first_brace:last_brace + 1]
+                    
+                    # Validate it's valid JSON
+                    json.loads(cleaned_output)
+                    final_output = cleaned_output
+                except json.JSONDecodeError as e:
+                    logger.warning("Summary output is not valid JSON, returning raw output: %s", e)
+                    final_output = output
+                
+                # Populate cache and return
+                with SUMMARY_LOCK:
+                    SUMMARY_CACHE[user] = {
+                        "timestamp": time.time(),
+                        "data": {"response": final_output, "source": used_api, "model": used_model}
+                    }
+                
+                logger.info("Generated SUMMARY for %s successfully", user)
+                return jsonify({"raw": {"response": final_output, "source": used_api, "model": used_model}}), 200
+            # =====================================================================================
 
             # ================== CHAT ENDPOINT: JUDGE LOGIC ONLY FOR CHAT ==================
             if action == "chat":
@@ -961,6 +1125,12 @@ async def handle_country_request(country_code):
             with CACHE_LOCK:
                 if country_code in ANALYSIS_IN_PROGRESS:
                     del ANALYSIS_IN_PROGRESS[country_code]
+        
+        # NEW: Release summary lock
+        if action == "summarize":
+            with SUMMARY_LOCK:
+                if user in SUMMARY_IN_PROGRESS:
+                    del SUMMARY_IN_PROGRESS[user]
 
 @app.route("/", methods=["GET"])
 def home():
