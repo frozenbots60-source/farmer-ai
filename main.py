@@ -11,6 +11,7 @@ import threading
 from flask import Flask, request, jsonify
 from urllib.parse import urlparse, quote
 from collections import deque
+from openai import AsyncOpenAI  # ADDED for VPS fallback
 
 # ================== LOGGING ===================
 logging.basicConfig(
@@ -25,6 +26,12 @@ app = Flask(__name__)
 # ================== API CONFIGURATION ===================
 # Gemini API for BOTH analysis and chat (GET method)
 GEMINI_API_BASE = "https://back-api.kustbotsweb.workers.dev/chat"
+
+# VPS BACKUP API CONFIGURATION
+VPS_IP = "104.168.62.69"
+VPS_BASE_URL = f"http://{VPS_IP}:8317/v1"
+VPS_API_KEY = "your-management-key" # Update this if needed
+backup_client = AsyncOpenAI(base_url=VPS_BASE_URL, api_key=VPS_API_KEY)
 
 # Global History to prevent swarm repetition (Last 20 messages across ALL users)
 GLOBAL_BOT_HISTORY = deque(maxlen=20)
@@ -805,7 +812,6 @@ async def handle_country_request(country_code):
         else:
             return jsonify({"error": "Invalid action"}), 400
 
-
         output = ""
         used_api = "none"
         used_model = "none"
@@ -822,24 +828,25 @@ async def handle_country_request(country_code):
 
         for attempt in range(loop_count):
             current_user_prompt = user_prompt + judge_feedback
+            api_success = False
             
-            # --- USE GEMINI API FOR BOTH ANALYSIS AND CHAT (GET METHOD) ---
-            try:
-                # 🚥 GLOBALLY RATE-LIMIT API CALLS TO PREVENT 429 HAMMERING 🚥
-                while True:
-                    with API_CALL_LOCK:
-                        if CURRENT_API_CALLS < MAX_CONCURRENT_API_CALLS:
-                            CURRENT_API_CALLS += 1
-                            break
-                    await asyncio.sleep(0.3) # Wait briefly for a slot to open up
+            # 🚥 GLOBALLY RATE-LIMIT API CALLS TO PREVENT 429 HAMMERING 🚥
+            while True:
+                with API_CALL_LOCK:
+                    if CURRENT_API_CALLS < MAX_CONCURRENT_API_CALLS:
+                        CURRENT_API_CALLS += 1
+                        break
+                await asyncio.sleep(0.3) # Wait briefly for a slot to open up
 
+            try:
+                # --- 1. USE MAIN GEMINI API ---
                 try:
                     # Combine system instruction and user prompt for Gemini
                     full_prompt = f"{system_instruction}\n\n{current_user_prompt}"
                     encoded_prompt = quote(full_prompt)
                     gemini_url = f"{GEMINI_API_BASE}?message={encoded_prompt}"
                     
-                    logger.info("Calling GEMINI API for %s: %s [Active Calls: %d]", action.upper(), GEMINI_API_BASE, CURRENT_API_CALLS)
+                    logger.info("Calling MAIN GEMINI API for %s: %s [Active Calls: %d]", action.upper(), GEMINI_API_BASE, CURRENT_API_CALLS)
                     timeout = aiohttp.ClientTimeout(total=60)
                     async with aiohttp.ClientSession(timeout=timeout) as session:
                         async with session.get(gemini_url) as r:
@@ -851,25 +858,49 @@ async def handle_country_request(country_code):
                                         output = raw_output
                                         used_api = "gemini-api"
                                         used_model = "gemini"
+                                        api_success = True
                             elif r.status == 429:
-                                logger.warning("Gemini API Status 429. Backing off...")
+                                logger.warning("Main Gemini API Status 429. Backing off...")
                                 await asyncio.sleep(2.0)
                             else:
-                                logger.warning("Gemini API Status %s", r.status)
+                                logger.warning("Main Gemini API Status %s", r.status)
                                 await asyncio.sleep(1.0)
-                finally:
-                    # Always release the concurrency lock
-                    with API_CALL_LOCK:
-                        CURRENT_API_CALLS -= 1
+                except Exception as e:
+                    logger.warning("Main Gemini API encountered an error: %s", e)
+                
+                # --- 2. TRY BACKUP VPS API IF MAIN API FAILED ---
+                if not api_success:
+                    logger.info("Main API failed. Calling BACKUP VPS API for %s...", action.upper())
+                    try:
+                        messages = []
+                        if system_instruction:
+                            messages.append({"role": "system", "content": system_instruction})
+                        messages.append({"role": "user", "content": current_user_prompt})
 
-            except Exception as e:
-                logger.warning("Gemini API failed: %s", e)
-                await asyncio.sleep(1.0)
+                        response = await backup_client.chat.completions.create(
+                            model="gemini-3-flash",
+                            messages=messages,
+                            stream=False, 
+                        )
+                        raw_output = response.choices[0].message.content
+                        if raw_output:
+                            output = raw_output
+                            used_api = "vps-backup-api"
+                            used_model = "gemini-3-flash"
+                            api_success = True
+                    except Exception as backup_e:
+                        logger.warning("Backup VPS API failed: %s", backup_e)
+                        await asyncio.sleep(1.0)
 
-            # If API failed, handle retry
+            finally:
+                # Always release the concurrency lock
+                with API_CALL_LOCK:
+                    CURRENT_API_CALLS -= 1
+
+            # If both APIs failed, handle retry
             if not output:
                 if attempt == loop_count - 1:
-                    return jsonify({"error": "All Inference APIs failed"}), 500
+                    return jsonify({"error": "All Inference APIs (Main & Backup) failed"}), 500
                 continue
             
             # ========================================================================
@@ -931,7 +962,7 @@ async def handle_country_request(country_code):
                 output = re.sub(r'-transitional.*?__', '', output, flags=re.DOTALL | re.IGNORECASE)
                 if '-transitional' in output.lower(): output = re.sub(r'-transitional.*', '', output, flags=re.DOTALL | re.IGNORECASE)
                 
-                # Strip ALL remaining hallucinated HTML/Markdown tags (like <blockquote>, <p>, <b>, <br>)
+                # Strip ALL remaining hallucinated HTML/Markdown tags (like blockquote, p, b, br)
                 output = re.sub(r'<[^>]+>', '', output)
 
                 output = re.sub(r"^(As an AI|I'm an AI|I am an AI|I cannot|Sorry, but|Interner Fehler).*?\s*", "", output, flags=re.I)
