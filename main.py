@@ -25,7 +25,7 @@ app = Flask(__name__)
 
 # ================== API CONFIGURATION ===================
 # Gemini API for BOTH analysis and chat (GET method)
-GEMINI_API_BASE = "https://back-api.kustbotsweb.workers.dev/chat"
+GEMINI_API_BASE = "https://aiapiback.kustbotsweb.workers.dev/chat"
 
 # VPS BACKUP API CONFIGURATION
 VPS_IP = "104.168.62.69"
