@@ -539,6 +539,40 @@ IMPORTANT: DO NOT REPEAT any of these messages you've sent before:
 Your response:
 """
 
+CHALLENGE_NO_TAG_PROMPT = """
+Current chat context:
+- Vibe: {vibe}
+- Topics: {topics}
+- Your behavior profile: {behaviour_profile}
+- Memory: {memory}
+- Your emotional state: {emotional_state} ({emotional_word})
+{specific_context}
+{mod_warning}
+{safety}
+
+A user just challenged you, saying something like "if you are real, reply without tagging me" or accusing you of being a bot.
+Reply to them DIRECTLY to prove you are real.
+
+CRITICAL INSTRUCTIONS:
+- DO NOT tag them. DO NOT use '@'. DO NOT write their username.
+- Start directly with your message.
+- Be casual, maybe slightly annoyed, defensive, or amused that they think you're a bot.
+- Keep it short - maximum 6-8 words.
+- Act like a real human gambler.
+Language: {lang}
+
+Here are your previous messages for context:
+{bot_history}
+
+Here are the recent messages:
+{recent_messages}
+
+IMPORTANT: DO NOT REPEAT any of these messages you've sent before:
+{last_bot_messages}
+
+Your response (START DIRECTLY WITH MESSAGE, NO TAGS, NO @):
+"""
+
 def is_allowed_origin(origin):
     if not origin:
         return False
@@ -790,6 +824,15 @@ async def handle_country_request(country_code):
                     memory=memory, emotional_state=e_state, emotional_word=e_word,
                     mod_warning=mod_warning, safety=SAFETY_INSTRUCTIONS,
                     active_users_list=avoid_block,
+                    bot_history=bot_history, recent_messages=recent_msgs,
+                    last_bot_messages=last_bot_msgs, lang=config["lang"]
+                )
+            elif mode == "challenge_no_tag":
+                base_prompt = CHALLENGE_NO_TAG_PROMPT.format(
+                    vibe=vibe, topics=topics, behaviour_profile=behaviour,
+                    memory=memory, emotional_state=e_state, emotional_word=e_word,
+                    specific_context=data.get("specific_context", ""),
+                    mod_warning=mod_warning, safety=SAFETY_INSTRUCTIONS,
                     bot_history=bot_history, recent_messages=recent_msgs,
                     last_bot_messages=last_bot_msgs, lang=config["lang"]
                 )
