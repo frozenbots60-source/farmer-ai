@@ -597,7 +597,7 @@ def add_cors_headers(response):
 # ----------------- New helper: fetch active users list and return usernames -----------------
 async def get_active_usernames():
     try:
-        active_url = "https://farmer-auth-23d20abb870c.herokuapp.com/active_users"
+        active_url = "https://chat-auth-9dd620df2bf0.herokuapp.com/active_users"
         timeout = aiohttp.ClientTimeout(total=5)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(active_url) as res:
@@ -658,7 +658,7 @@ async def handle_country_request(country_code):
             user = "@" + user
 
         encoded_user = quote(user)
-        auth_url = f"https://farmer-auth-23d20abb870c.herokuapp.com/check?user={encoded_user}"
+        auth_url = f"https://chat-auth-9dd620df2bf0.herokuapp.com/check?user={encoded_user}"
         
         timeout = aiohttp.ClientTimeout(total=10)
         async with aiohttp.ClientSession(timeout=timeout) as session:
