@@ -966,9 +966,9 @@ async def handle_country_request(country_code):
             if action == "summarize":
                 # Clean up the output - remove markdown code blocks if present
                 cleaned_output = output
-                cleaned_output = re.sub(r'```json\s*', '', cleaned_output)
-                cleaned_output = re.sub(r'
-```\s*', '', cleaned_output)
+                cleaned_output = re.sub(r"```json\s*", "", cleaned_output)
+                cleaned_output = re.sub(r"
+```\s*", "", cleaned_output)
                 cleaned_output = cleaned_output.strip()
                 
                 # Try to extract JSON if there's extra text
