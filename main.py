@@ -891,7 +891,7 @@ async def handle_country_request(country_code):
                     gemini_url = f"{GEMINI_API_BASE}?message={encoded_prompt}"
                     
                     logger.info("Calling MAIN GEMINI API for %s: %s [Active Calls: %d]", action.upper(), GEMINI_API_BASE, CURRENT_API_CALLS)
-                    timeout = aiohttp.ClientTimeout(total=60)
+                    timeout = aiohttp.ClientTimeout(total=120)  # CHANGED: 60 -> 120
                     async with aiohttp.ClientSession(timeout=timeout) as session:
                         async with session.get(gemini_url) as r:
                             if r.status == 200:
@@ -925,6 +925,7 @@ async def handle_country_request(country_code):
                             model="gemini-3-flash",
                             messages=messages,
                             stream=False, 
+                            timeout=120  # CHANGED: added explicit 120s timeout
                         )
                         raw_output = response.choices[0].message.content
                         if raw_output:
