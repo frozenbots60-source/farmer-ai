@@ -24,10 +24,28 @@ logger = logging.getLogger("CHAT-FARMER")
 app = Flask(__name__)
 
 # ================== API CONFIGURATION ===================
-# Gemini API for BOTH analysis and chat (GET method)
+# --- PRIMARY: GOOGLE AI (Vertex AI) CONFIGURATION ---
+# Fill in your own key/project here (or set these env vars).
+GOOGLE_AI_API_KEY = os.getenv("GOOGLE_AI_API_KEY", "hemloobhai")  # Put your AQ... key here
+GOOGLE_AI_PROJECT_ID = os.getenv("GOOGLE_AI_PROJECT_ID", "590977126899")
+GOOGLE_AI_LOCATION = os.getenv("GOOGLE_AI_LOCATION", "global")  # Or "us-central1"
+GOOGLE_AI_MODEL_ID = os.getenv("GOOGLE_AI_MODEL_ID", "gemini-2.5-flash-lite")
+
+# Dynamically construct host and endpoint based on location
+if GOOGLE_AI_LOCATION == "global":
+    GOOGLE_AI_HOST = "aiplatform.googleapis.com"
+else:
+    GOOGLE_AI_HOST = f"{GOOGLE_AI_LOCATION}-aiplatform.googleapis.com"
+
+GOOGLE_AI_ENDPOINT_URL = (
+    f"https://{GOOGLE_AI_HOST}/v1/projects/{GOOGLE_AI_PROJECT_ID}/locations/{GOOGLE_AI_LOCATION}"
+    f"/publishers/google/models/{GOOGLE_AI_MODEL_ID}:generateContent?key={GOOGLE_AI_API_KEY}"
+)
+
+# --- FALLBACK #1: Gemini API worker (previously the main API) ---
 GEMINI_API_BASE = "https://aiapiback.kustbotsweb.workers.dev/flash"
 
-# VPS BACKUP API CONFIGURATION
+# --- FALLBACK #2: VPS BACKUP API CONFIGURATION ---
 VPS_IP = "104.168.62.69"
 VPS_BASE_URL = f"http://{VPS_IP}:8317/v1"
 VPS_API_KEY = "your-management-key" # Update this if needed
@@ -60,7 +78,7 @@ COUNTRY_CONFIG = {
         "lang": "German (Deutsch) - Street Slang",
         "vibe": "Young German gambler. Uses 'Digga', 'Alter', 'Safe', 'Junge', 'Lost', 'Wyld'. Writes in lowercase mostly.",
         "questions": [
-            "digga was geht heute?", "komplett lost heute...", "jemand am gewinnen?", 
+            "digga was geht heute?", "komplett lost heute...", "jemand am gewinnen?",
             "digga dieser slot ist tot", "alter was ein pech"
         ]
     },
@@ -68,7 +86,7 @@ COUNTRY_CONFIG = {
         "lang": "Turkish (Türkçe)",
         "vibe": "Turkish gambler. Uses 'Abi', 'Kral', 'Hocam', 'Lan' (casually), 'Vallah'. Emotional and loud.",
         "questions": [
-            "abi bu ne ya?", "kral taktik var mı?", "bugün kasa eridi resmen", 
+            "abi bu ne ya?", "kral taktik var mı?", "bugün kasa eridi resmen",
             "vallah battık beyler", "selam beyler durumlar ne"
         ]
     },
@@ -76,7 +94,7 @@ COUNTRY_CONFIG = {
         "lang": "Portuguese (Português - Brazil)",
         "vibe": "Brazilian gambler. Uses 'Mano', 'Velho', 'Nossa', 'Top', 'Zica'. Casual and friendly.",
         "questions": [
-            "e aí mano tudo certo?", "nossa que azar hoje", "alguém forrando?", 
+            "e aí mano tudo certo?", "nossa que azar hoje", "alguém forrando?",
             "hoje tá osso", "bora recuperar galera"
         ]
     },
@@ -84,7 +102,7 @@ COUNTRY_CONFIG = {
         "lang": "Casual English",
         "vibe": "Bored gambler. Uses 'bruh', 'lol', 'rip', 'gg', 'scam', 'dry'. mostly lowercase.",
         "questions": [
-            "yo any huge wins?", "rip my balance lol", "games are so dry rn", 
+            "yo any huge wins?", "rip my balance lol", "games are so dry rn",
             "bruh this game is rigged", "gl everyone"
         ]
     },
@@ -92,7 +110,7 @@ COUNTRY_CONFIG = {
         "lang": "American English",
         "vibe": "US gambler. Uses 'bro', 'dude', 'wild', 'fr', 'no cap', 'bet'.",
         "questions": [
-            "yo what's good chat", "bro i'm down bad", "anyone printing?", 
+            "yo what's good chat", "bro i'm down bad", "anyone printing?",
             "this is wild fr", "let's get it"
         ]
     },
@@ -100,7 +118,7 @@ COUNTRY_CONFIG = {
         "lang": "British English",
         "vibe": "UK Lad. Uses 'mate', 'innit', 'bruv', 'proper', 'dead'.",
         "questions": [
-            "alright lads?", "proper dead today innit", "any luck mates?", 
+            "alright lads?", "proper dead today innit", "any luck mates?",
             "cheers for the luck", "bit quiet yeah?"
         ]
     },
@@ -108,7 +126,7 @@ COUNTRY_CONFIG = {
         "lang": "Tagalog / Taglish",
         "vibe": "Filipino gambler. Uses 'lods', 'pre', 'awit', 'sana all', 'olats'.",
         "questions": [
-            "kamusta mga lods", "awit talo na naman", "sana all nananalo", 
+            "kamusta mga lods", "awit talo na naman", "sana all nananalo",
             "pre ano laro ngayon?", "may swerte ba?"
         ]
     },
@@ -116,7 +134,7 @@ COUNTRY_CONFIG = {
         "lang": "Japanese (Casual/Slang)",
         "vibe": "Japanese gambler. Uses 'maji', 'yabai', 'w', 'kusa', 'gachi'.",
         "questions": [
-            "みんな調子どう？", "まじで勝てんw", "やばい、溶けた...", 
+            "みんな調子どう？", "まじで勝てんw", "やばい、溶けた...",
             "誰か当たりきてる？", "今日はダメかもw"
         ]
     },
@@ -124,7 +142,7 @@ COUNTRY_CONFIG = {
         "lang": "Polish (Polski)",
         "vibe": "Polish gambler. Uses 'kurde', 'siema', 'masakra', 'ja pier...', 'lol'.",
         "questions": [
-            "siema pany jak idzie", "kurde ale lipa dzisiaj", "wygrał ktoś coś?", 
+            "siema pany jak idzie", "kurde ale lipa dzisiaj", "wygrał ktoś coś?",
             "masakra z tym slotem", "powodzenia all"
         ]
     },
@@ -132,7 +150,7 @@ COUNTRY_CONFIG = {
         "lang": "Thai",
         "vibe": "Thai gambler. Uses '555' (laugh), 'sad', 'su su'.",
         "questions": [
-            "วันนี้เป็นไงบ้างครับ", "หมดตัวแล้ว 555", "มีใครบวกบ้าง", 
+            "วันนี้เป็นไงบ้างครับ", "หมดตัวแล้ว 555", "มีใครบวกบ้าง",
             "สู้ๆ นะทุกคน", "วันนี้เงียบจัง"
         ]
     },
@@ -140,7 +158,7 @@ COUNTRY_CONFIG = {
         "lang": "Korean (Casual)",
         "vibe": "Korean gambler. Uses 'zz', 'keke', 'hul', 'shibal' (softly).",
         "questions": [
-            "형님들 오늘 어때요?", "아이고 다 잃었네...", "대박 터진 분?", 
+            "형님들 오늘 어때요?", "아이고 다 잃었네...", "대박 터진 분?",
             "오늘 너무 안되네요 ㅠㅠ", "다들 ㅎㅇㅌ"
         ]
     },
@@ -148,7 +166,7 @@ COUNTRY_CONFIG = {
         "lang": "Russian (Slang)",
         "vibe": "Russian gambler. Uses 'brat', 'blin', 'gg', 'scam', 'zaebal'.",
         "questions": [
-            "ку всем, как оно?", "блин все слил", "есть живые?", 
+            "ку всем, как оно?", "блин все слил", "есть живые?",
             "удачи пацаны", "сегодня не мой день"
         ]
     },
@@ -156,7 +174,7 @@ COUNTRY_CONFIG = {
         "lang": "Vietnamese",
         "vibe": "Vietnamese gambler. Uses 'bac', 'vl', 'vai', 'chan', 'anh em'.",
         "questions": [
-            "chào anh em, nay thế nào", "vãi thật thua hết rồi", "có ai về bờ không", 
+            "chào anh em, nay thế nào", "vãi thật thua hết rồi", "có ai về bờ không",
             "chán quá game hút máu", "chúc ae may mắn"
         ]
     },
@@ -164,7 +182,7 @@ COUNTRY_CONFIG = {
         "lang": "Finnish",
         "vibe": "Finnish gambler. Uses 'moi', 'vittu' (lightly), 'perkele', 'noni'.",
         "questions": [
-            "moi kaikille", "voi ei taas meni rahat", "onko voittoja?", 
+            "moi kaikille", "voi ei taas meni rahat", "onko voittoja?",
             "perkele kun ei osu", "gl kaikille"
         ]
     },
@@ -172,7 +190,7 @@ COUNTRY_CONFIG = {
         "lang": "Spanish (Latam/Spain)",
         "vibe": "Latino gambler. Uses 'tio', 'bro', 'joder', 'no mames', 'vamos'.",
         "questions": [
-            "que tal gente", "hoy perdi todo bro", "alguien ganando?", 
+            "que tal gente", "hoy perdi todo bro", "alguien ganando?",
             "vamos con todo", "mucha suerte"
         ]
     },
@@ -180,7 +198,7 @@ COUNTRY_CONFIG = {
         "lang": "Nigerian Pidgin",
         "vibe": "Naija gambler. Uses 'Abeg', 'How far', 'No wahala', 'Omo', 'Dey', 'Sabi'. Very expressive.",
         "questions": [
-            "how far my people?", "omo i don lose money o", "who dey win for here?", 
+            "how far my people?", "omo i don lose money o", "who dey win for here?",
             "abeg show love na", "this game no dey smile"
         ]
     },
@@ -188,7 +206,7 @@ COUNTRY_CONFIG = {
         "lang": "Arabic (Chat/Arabizi)",
         "vibe": "Arabic gambler. Uses 'shabab', 'wallah', 'haram', 'yallah'.",
         "questions": [
-            "salam shabab keef al hal", "wallah khasirt kul shi", "mabrook lil rabihin", 
+            "salam shabab keef al hal", "wallah khasirt kul shi", "mabrook lil rabihin",
             "yallah nshoof al huth", "wein al nas alyom"
         ]
     },
@@ -204,7 +222,7 @@ COUNTRY_CONFIG = {
         "lang": "Norwegian",
         "vibe": "Norwegian gambler. Uses 'faen', 'uff', 'jaja'.",
         "questions": [
-            "hei folkens", "uff tapte alt i dag", "noen som vinner?", 
+            "hei folkens", "uff tapte alt i dag", "noen som vinner?",
             "lykke til alle", "stille i chatten"
         ]
     },
@@ -212,7 +230,7 @@ COUNTRY_CONFIG = {
         "lang": "Indonesian (Bahasa Gaul)",
         "vibe": "Indo gambler. Uses 'gan', 'bang', 'anjir', 'wkwk', 'rungkad', 'gacor'.",
         "questions": [
-            "halo gan gimana?", "aduh rungkad bos", "mantap yang jp", 
+            "halo gan gimana?", "aduh rungkad bos", "mantap yang jp",
             "sepi amat ya", "gas terus bang"
         ]
     },
@@ -220,7 +238,7 @@ COUNTRY_CONFIG = {
         "lang": "Urdu/English (Roman Urdu)",
         "vibe": "Pakistani street smart gambler. Uses 'bro', 'Bhai', 'Scene', 'Khair hai', 'Bachao'. Abbr: 'kya', 'n', 'thx'.",
         "questions": [
-            "kya scene hai boys?", "aaj bohot loss hua yaar", "koi jeeta kya aaj?", 
+            "kya scene hai boys?", "aaj bohot loss hua yaar", "koi jeeta kya aaj?",
             "salam bhai log", "maza nahi aa raha aaj"
         ]
     },
@@ -235,7 +253,7 @@ COUNTRY_CONFIG = {
         "lang": "Hinglish (Indian Casual)",
         "vibe": "Authentic Desi gambler. Uses 'Bhai', 'Yaar', 'Arre', 'Mast', 'Sahi hai', 'Lagg gaye'. Casual, uses 'tu' not 'aap'. Abbr: 'kya', 'n', 'h', 'thx'.",
         "questions": [
-            "kya bolti public", "aaj 500 ka loss ho gaya yaar", "koi sports khal ra", 
+            "kya bolti public", "aaj 500 ka loss ho gaya yaar", "koi sports khal ra",
             "bhai log kya scene hai", "sahi hai boss"
         ]
     }
@@ -268,7 +286,7 @@ Vibe: {vibe}
 
 Core Personality:
 - You are a local native speaker. Use local slang naturally.
-- You are casual, slightly addicted, and careless. 
+- You are casual, slightly addicted, and careless.
 - You type like you are on a phone with a cracked screen (no capitalization, no periods at end).
 - Use abbreviations (u, r, lol, k, thx, rn, tbh).
 - NEVER write long paragraphs. Keep it 1 short sentence max.
@@ -288,7 +306,7 @@ IMPORTANT: You MUST speak in {lang}. Do not sound like a customer support agent.
 """
 
 ANALYSIS_SYSTEM_PROMPT = """
-You are an expert social analyst for casino chat rooms. 
+You are an expert social analyst for casino chat rooms.
 Your job is to read chat logs and output a strict JSON summary of the social dynamics.
 Do NOT output conversational text. ONLY output valid JSON.
 """
@@ -320,7 +338,7 @@ Return a single JSON object with this EXACT structure:
 }}
 """
 
-# ================== NEW: SUMMARY SYSTEM PROMPT (SERVER-SIDE) ==================
+# ================== SUMMARY SYSTEM PROMPT (SERVER-SIDE) ==================
 SUMMARY_SYSTEM_PROMPT = """
 You are an expert chat analyst and summarizer. Your job is to analyze chat logs from a casino chat room and create comprehensive summaries.
 
@@ -521,7 +539,7 @@ CRITICAL INSTRUCTIONS:
 - AVOID GENERIC MESSAGES: No "how is everyone", no "any winners", no "rip balance" on repeat.
 - AVOID LOSS COMPLAINTS: You've complained about losing enough. Talk about something ELSE now.
 - Each message must be FRESH and DIFFERENT from your last 5 messages.
-- EXAMPLES (Use these for STYLE, do not copy text): 
+- EXAMPLES (Use these for STYLE, do not copy text):
   [{style_examples}]
 
 - Keep it short (max 8-10 words).
@@ -604,7 +622,7 @@ async def get_active_usernames():
             async with session.get(active_url) as res:
                 res.raise_for_status()
                 payload = await res.json()
-        
+
         users = []
         for item in payload.get("active_users", []):
             uname = item.get("username")
@@ -626,6 +644,37 @@ async def get_active_usernames():
         logger.warning("Failed to fetch active users: %s", e)
         return []
 
+# -----------------------------------------------------------------------------------------------
+
+# ----------------- New helper: call the Google AI (Vertex AI) API directly -----------------
+async def call_google_ai(full_prompt):
+    """
+    Calls Google's Vertex AI generateContent endpoint directly using an API key.
+    Returns the generated text, or raises on failure so callers can fall back.
+    """
+    request_body = {
+        "contents": [
+            {"role": "user", "parts": [{"text": full_prompt}]}
+        ]
+    }
+    headers = {"Content-Type": "application/json"}
+    timeout = aiohttp.ClientTimeout(total=120)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.post(GOOGLE_AI_ENDPOINT_URL, headers=headers, json=request_body) as r:
+            if r.status != 200:
+                body_text = await r.text()
+                raise RuntimeError(f"Google AI API status {r.status}: {body_text[:300]}")
+            data = await r.json()
+
+    candidates = data.get("candidates", [])
+    if not candidates:
+        raise RuntimeError("Google AI API returned no candidates")
+
+    parts = candidates[0].get("content", {}).get("parts", [])
+    text = "".join(p.get("text", "") for p in parts).strip()
+    if not text:
+        raise RuntimeError("Google AI API returned empty text")
+    return text
 # -----------------------------------------------------------------------------------------------
 
 @app.route("/<country_code>", methods=["POST", "GET"])
@@ -660,13 +709,13 @@ async def handle_country_request(country_code):
 
         encoded_user = quote(user)
         auth_url = f"https://free-gwendolyn-frozenbots-28495340.koyeb.app/check?user={encoded_user}"
-        
+
         timeout = aiohttp.ClientTimeout(total=10)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(auth_url) as auth_res:
                 auth_res.raise_for_status()
                 auth_data = await auth_res.json()
-        
+
         if not auth_data.get("exists"):
             return jsonify({"error": "Unauthorized user"}), 403
 
@@ -683,23 +732,23 @@ async def handle_country_request(country_code):
                 if cached_data and (time.time() - cached_data['timestamp'] < CACHE_TTL_SECONDS):
                     logger.info("Served ANALYSIS for %s from CACHE (Age: %.1fs)", country_code, time.time() - cached_data['timestamp'])
                     return jsonify({"raw": cached_data['data'], "cached": True}), 200
-                
+
                 # If no cache and no one else is currently fetching it, claim the lock
                 if not ANALYSIS_IN_PROGRESS.get(country_code, False):
                     ANALYSIS_IN_PROGRESS[country_code] = True
                     break
-            
+
             # If someone else is fetching, wait and check again
             await asyncio.sleep(0.5)
             wait_time += 1
-            
+
             # Failsafe: if we waited 10 seconds and it's still stuck, take over
             if wait_time >= 20:
                 with CACHE_LOCK:
                     ANALYSIS_IN_PROGRESS[country_code] = True
                 break
 
-    # ================== NEW: SUMMARY CACHE CHECK ==================
+    # ================== SUMMARY CACHE CHECK ==================
     if action == "summarize":
         wait_time = 0
         while wait_time < 20:
@@ -708,14 +757,14 @@ async def handle_country_request(country_code):
                 if cached_summary and (time.time() - cached_summary['timestamp'] < SUMMARY_CACHE_TTL_SECONDS):
                     logger.info("Served SUMMARY for %s from CACHE (Age: %.1fs)", user, time.time() - cached_summary['timestamp'])
                     return jsonify({"raw": cached_summary['data'], "cached": True}), 200
-                
+
                 if not SUMMARY_IN_PROGRESS.get(user, False):
                     SUMMARY_IN_PROGRESS[user] = True
                     break
-            
+
             await asyncio.sleep(0.5)
             wait_time += 1
-            
+
             if wait_time >= 20:
                 with SUMMARY_LOCK:
                     SUMMARY_IN_PROGRESS[user] = True
@@ -726,7 +775,7 @@ async def handle_country_request(country_code):
     try:
         system_instruction = ""
         user_prompt = ""
-        
+
         # 1. Base Persona
         persona_text = PERSONA_TEMPLATE.format(
             lang=config["lang"],
@@ -768,7 +817,7 @@ async def handle_country_request(country_code):
             # Low temp for analysis
             ai_temperature = 0.4
 
-        # ================== NEW: SUMMARIZE ACTION ==================
+        # ================== SUMMARIZE ACTION ==================
         elif action == "summarize":
             system_instruction = SUMMARY_SYSTEM_PROMPT
             user_prompt = SUMMARY_USER_PROMPT.format(
@@ -786,10 +835,10 @@ async def handle_country_request(country_code):
             # Low temp for summary (more analytical)
             ai_temperature = 0.3
         # ==============================================================
-            
+
         elif action == "chat":
             system_instruction = persona_text
-            
+
             vibe = data.get("vibe", "neutral")
             topics = data.get("topics", "none")
             behaviour = data.get("behaviour_profile", "friendly")
@@ -848,7 +897,7 @@ async def handle_country_request(country_code):
                     bot_history=bot_history, recent_messages=recent_msgs,
                     last_bot_messages=last_bot_msgs, lang=config["lang"]
                 )
-            
+
             user_prompt = avoid_block + base_prompt + global_uniqueness_instruction
             # High temp for creativity
             ai_temperature = 0.7
@@ -859,10 +908,10 @@ async def handle_country_request(country_code):
         output = ""
         used_api = "none"
         used_model = "none"
-        
+
         # Model name for tracking
         selected_model = "gemini"
-        
+
         # ========================================================================
         # RETRY LOOP: WRAP API CALLS AND CHECK FOR BOT MENTIONS (MAX 3 ATTEMPTS)
         # ========================================================================
@@ -873,7 +922,7 @@ async def handle_country_request(country_code):
         for attempt in range(loop_count):
             current_user_prompt = user_prompt + judge_feedback
             api_success = False
-            
+
             # 🚥 GLOBALLY RATE-LIMIT API CALLS TO PREVENT 429 HAMMERING 🚥
             while True:
                 with API_CALL_LOCK:
@@ -883,38 +932,51 @@ async def handle_country_request(country_code):
                 await asyncio.sleep(0.3) # Wait briefly for a slot to open up
 
             try:
-                # --- 1. USE MAIN GEMINI API ---
+                full_prompt = f"{system_instruction}\n\n{current_user_prompt}"
+
+                # --- 1. PRIMARY: GOOGLE AI (VERTEX AI) API ---
                 try:
-                    # Combine system instruction and user prompt for Gemini
-                    full_prompt = f"{system_instruction}\n\n{current_user_prompt}"
-                    encoded_prompt = quote(full_prompt)
-                    gemini_url = f"{GEMINI_API_BASE}?message={encoded_prompt}"
-                    
-                    logger.info("Calling MAIN GEMINI API for %s: %s [Active Calls: %d]", action.upper(), GEMINI_API_BASE, CURRENT_API_CALLS)
-                    timeout = aiohttp.ClientTimeout(total=120)  # CHANGED: 60 -> 120
-                    async with aiohttp.ClientSession(timeout=timeout) as session:
-                        async with session.get(gemini_url) as r:
-                            if r.status == 200:
-                                gemini_data = await r.json()
-                                if gemini_data.get("success"):
-                                    raw_output = gemini_data.get("response", "")
-                                    if raw_output:
-                                        output = raw_output
-                                        used_api = "gemini-api"
-                                        used_model = "gemini"
-                                        api_success = True
-                            elif r.status == 429:
-                                logger.warning("Main Gemini API Status 429. Backing off...")
-                                await asyncio.sleep(2.0)
-                            else:
-                                logger.warning("Main Gemini API Status %s", r.status)
-                                await asyncio.sleep(1.0)
+                    logger.info("Calling PRIMARY GOOGLE AI API for %s: %s [Active Calls: %d]", action.upper(), GOOGLE_AI_ENDPOINT_URL.split("?")[0], CURRENT_API_CALLS)
+                    raw_output = await call_google_ai(full_prompt)
+                    if raw_output:
+                        output = raw_output
+                        used_api = "google-ai-api"
+                        used_model = GOOGLE_AI_MODEL_ID
+                        api_success = True
                 except Exception as e:
-                    logger.warning("Main Gemini API encountered an error: %s", e)
-                
-                # --- 2. TRY BACKUP VPS API IF MAIN API FAILED ---
+                    logger.warning("Primary Google AI API encountered an error: %s", e)
+
+                # --- 2. FALLBACK: MAIN GEMINI WORKER API (previously primary) ---
                 if not api_success:
-                    logger.info("Main API failed. Calling BACKUP VPS API for %s...", action.upper())
+                    try:
+                        encoded_prompt = quote(full_prompt)
+                        gemini_url = f"{GEMINI_API_BASE}?message={encoded_prompt}"
+
+                        logger.info("Google AI failed. Calling FALLBACK GEMINI WORKER API for %s: %s [Active Calls: %d]", action.upper(), GEMINI_API_BASE, CURRENT_API_CALLS)
+                        timeout = aiohttp.ClientTimeout(total=120)
+                        async with aiohttp.ClientSession(timeout=timeout) as session:
+                            async with session.get(gemini_url) as r:
+                                if r.status == 200:
+                                    gemini_data = await r.json()
+                                    if gemini_data.get("success"):
+                                        raw_output = gemini_data.get("response", "")
+                                        if raw_output:
+                                            output = raw_output
+                                            used_api = "gemini-api"
+                                            used_model = "gemini"
+                                            api_success = True
+                                elif r.status == 429:
+                                    logger.warning("Fallback Gemini Worker API Status 429. Backing off...")
+                                    await asyncio.sleep(2.0)
+                                else:
+                                    logger.warning("Fallback Gemini Worker API Status %s", r.status)
+                                    await asyncio.sleep(1.0)
+                    except Exception as e:
+                        logger.warning("Fallback Gemini Worker API encountered an error: %s", e)
+
+                # --- 3. FALLBACK: VPS BACKUP API IF EVERYTHING ELSE FAILED ---
+                if not api_success:
+                    logger.info("Primary + Fallback Gemini failed. Calling VPS BACKUP API for %s...", action.upper())
                     try:
                         messages = []
                         if system_instruction:
@@ -924,8 +986,8 @@ async def handle_country_request(country_code):
                         response = await backup_client.chat.completions.create(
                             model="gemini-3-flash",
                             messages=messages,
-                            stream=False, 
-                            timeout=120  # CHANGED: added explicit 120s timeout
+                            stream=False,
+                            timeout=120
                         )
                         raw_output = response.choices[0].message.content
                         if raw_output:
@@ -942,14 +1004,14 @@ async def handle_country_request(country_code):
                 with API_CALL_LOCK:
                     CURRENT_API_CALLS -= 1
 
-            # If both APIs failed, handle retry
+            # If all APIs failed, handle retry
             if not output:
                 if attempt == loop_count - 1:
-                    return jsonify({"error": "All Inference APIs (Main & Backup) failed"}), 500
+                    return jsonify({"error": "All Inference APIs (Google AI, Gemini Worker & VPS Backup) failed"}), 500
                 continue
-            
+
             # ========================================================================
-            
+
             output = str(output).strip()
 
             # ================== ANALYSIS ENDPOINT: RETURN DIRECTLY, NO PROCESSING ==================
@@ -963,14 +1025,14 @@ async def handle_country_request(country_code):
                 return jsonify({"raw": {"response": output, "source": used_api, "model": used_model}}), 200
             # =========================================================================================
 
-            # ================== NEW: SUMMARIZE ENDPOINT: PROCESS AND RETURN ==================
+            # ================== SUMMARIZE ENDPOINT: PROCESS AND RETURN ==================
             if action == "summarize":
                 # Clean up the output - remove markdown code blocks if present
                 cleaned_output = output
                 cleaned_output = re.sub(r"```json\s*", "", cleaned_output)
-                cleaned_output = re.sub(r"\n```\s*", "", cleaned_output)  # FIXED: was a literal newline
+                cleaned_output = re.sub(r"\n```\s*", "", cleaned_output)
                 cleaned_output = cleaned_output.strip()
-                
+
                 # Try to extract JSON if there's extra text
                 try:
                     # Find JSON object in the output
@@ -978,21 +1040,21 @@ async def handle_country_request(country_code):
                     last_brace = cleaned_output.rfind('}')
                     if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
                         cleaned_output = cleaned_output[first_brace:last_brace + 1]
-                    
+
                     # Validate it's valid JSON
                     json.loads(cleaned_output)
                     final_output = cleaned_output
                 except json.JSONDecodeError as e:
                     logger.warning("Summary output is not valid JSON, returning raw output: %s", e)
                     final_output = output
-                
+
                 # Populate cache and return
                 with SUMMARY_LOCK:
                     SUMMARY_CACHE[user] = {
                         "timestamp": time.time(),
                         "data": {"response": final_output, "source": used_api, "model": used_model}
                     }
-                
+
                 logger.info("Generated SUMMARY for %s successfully", user)
                 return jsonify({"raw": {"response": final_output, "source": used_api, "model": used_model}}), 200
             # =====================================================================================
@@ -1002,11 +1064,11 @@ async def handle_country_request(country_code):
                 # ========================================================================
                 # RIGOROUS JUDGE LOGIC
                 # ========================================================================
-                
+
                 # 1. Clean formatting
                 output = re.sub(r'-transitional.*?__', '', output, flags=re.DOTALL | re.IGNORECASE)
                 if '-transitional' in output.lower(): output = re.sub(r'-transitional.*', '', output, flags=re.DOTALL | re.IGNORECASE)
-                
+
                 # Strip ALL remaining hallucinated HTML/Markdown tags (like blockquote, p, b, br)
                 output = re.sub(r'<[^>]+>', '', output)
 
@@ -1014,10 +1076,10 @@ async def handle_country_request(country_code):
                 output = re.sub(r'^\s*(Here is|Sure,|Okay,|I will|Response:|Reply:|Output:|Answer:|My response:|Bot:).*?(\n|$)', '', output, flags=re.I | re.MULTILINE)
                 output = output.replace("```json", "").replace("```", "")
                 output = re.sub(r'@\(([^)]+)\)', r'@\1', output)
-                
-                emoji_pattern = re.compile(u"[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U0001F1E0-\U0001F1FF\u2600-\u26FF\u2700-\u27BF]+", flags=re.UNICODE)
+
+                emoji_pattern = re.compile(u"[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U0001F1E0-\U0001F1FF☀-⛿✀-➿]+", flags=re.UNICODE)
                 output = emoji_pattern.sub("", output)
-                output = output.replace("\uFE0F", "").replace("/", "").replace("\\", "")
+                output = output.replace("️", "").replace("/", "").replace("\\", "")
 
                 output = re.sub(r'[.,!?;:]', '', output)
 
@@ -1042,7 +1104,7 @@ async def handle_country_request(country_code):
                     output = "\n".join(filtered).strip()
                 except Exception:
                     pass
-                
+
                 if len(output) > 200: output = output[:197] + "..."
 
                 # ========================================================================
@@ -1064,7 +1126,7 @@ async def handle_country_request(country_code):
                         is_invalid_format = True
                         output = ""
                         break
-                
+
                 if is_invalid_format and attempt < loop_count - 1:
                     await asyncio.sleep(1.0)
                     continue
@@ -1072,13 +1134,13 @@ async def handle_country_request(country_code):
 
                 # 3. Script Check
                 latin_script_countries = ["in", "pk", "ph", "id", "vn", "tr", "de", "us", "uk", "en", "pt", "es", "fi", "ng", "no", "pl"]
-                bad_scripts_regex = r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0900-\u097F\u0980-\u09FF\u0400-\u04FF\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF\uAC00-\uD7AF\u0E00-\u0E7F]'
-                
+                bad_scripts_regex = r'[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿ऀ-ॿঀ-৿Ѐ-ӿ一-鿿぀-ゟ゠-ヿ가-힯฀-๿]'
+
                 if country_code in latin_script_countries:
                     if re.search(bad_scripts_regex, output):
                         logger.warning("Judge DETECTED LANGUAGE SWITCH. REGENERATING...")
                         judge_feedback = f"\nSYSTEM ALERT: You just used a foreign script. Write ONLY in the Latin/English alphabet."
-                        output = "" 
+                        output = ""
 
                 # 4. Forbidden Content Check
                 forbidden_patterns = [
@@ -1096,7 +1158,7 @@ async def handle_country_request(country_code):
                         output = ""
                         rules_violation = True
                         break
-                
+
                 if rules_violation and attempt < loop_count - 1:
                     await asyncio.sleep(1.0)
                     continue
@@ -1141,7 +1203,7 @@ async def handle_country_request(country_code):
                     continue
 
                 # 8. TOPIC STAGNATION CHECK - Detect if stuck on "loss" theme
-                loss_keywords = ['loss', 'lost', 'lose', 'losing', 'broke', 'bancrot', 'zero', 'rungkad', 'olats', 
+                loss_keywords = ['loss', 'lost', 'lose', 'losing', 'broke', 'bancrot', 'zero', 'rungkad', 'olats',
                                  'thua', 'härviö', 'perdi', 'khasirt', 'fail', 'dead', 'rip', 'skinned', 'battu',
                                  'gone', 'down bad', 'liquidated', 'rekt', 'wiped']
                 stuck_on_loss = False
@@ -1154,13 +1216,13 @@ async def handle_country_request(country_code):
                         for old_msg in list(GLOBAL_BOT_HISTORY)[-5:]:  # Last 5 messages
                             old_lower = old_msg.lower()
                             recent_loss_count += sum(1 for kw in loss_keywords if kw in old_lower)
-                        
+
                         if recent_loss_count >= 2:  # If 2+ recent messages about loss
                             logger.warning("Judge DETECTED TOPIC STAGNATION on loss theme. REGENERATING...")
                             judge_feedback = "\nSYSTEM ALERT: You've been talking about losing too much. CHANGE THE TOPIC COMPLETELY. Talk about games, luck, the site, ask a question, or make a random observation. NO MORE LOSS COMPLAINTS."
                             stuck_on_loss = True
                             output = ""
-                
+
                 if stuck_on_loss and attempt < loop_count - 1:
                     await asyncio.sleep(1.0)
                     continue
@@ -1201,8 +1263,8 @@ async def handle_country_request(country_code):
             with CACHE_LOCK:
                 if country_code in ANALYSIS_IN_PROGRESS:
                     del ANALYSIS_IN_PROGRESS[country_code]
-        
-        # NEW: Release summary lock
+
+        # Release summary lock
         if action == "summarize":
             with SUMMARY_LOCK:
                 if user in SUMMARY_IN_PROGRESS:
